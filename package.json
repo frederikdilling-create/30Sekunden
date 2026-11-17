@@ -1,0 +1,18 @@
+{
+  "name": "the-30-seconds-challenge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "xlsx": "^0.18.5"
+  }
+}

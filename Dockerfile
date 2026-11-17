@@ -1,0 +1,12 @@
+FROM node:24-bookworm-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --chown=node:node server.mjs ./
+COPY --chown=node:node public ./public
+RUN mkdir /app/data && chown node:node /app/data
+USER node
+ENV NODE_ENV=production PORT=3000 DATA_DIR=/app/data
+EXPOSE 3000
+VOLUME ["/app/data"]
+CMD ["node", "server.mjs"]

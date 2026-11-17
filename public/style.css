@@ -1747,3 +1747,440 @@ dialog input {
   font-variant-numeric: tabular-nums;
   color: var(--teal);
 }
+
+/* Show identity: visual treatment only; layout, chart colors and behavior are retained. */
+:root {
+  --navy: #091a37;
+  --ink: #1c2e4a;
+  --muted: #687991;
+  --line: #dfe5ef;
+  --bg: #f3f5fa;
+  --show-blue: #143f79;
+  --show-gold: #f2be45;
+  --show-gold-light: #fff2cc;
+  --show-shadow: 0 5px 24px rgba(12, 31, 62, 0.045);
+}
+body {
+  background: var(--bg);
+}
+h1 {
+  font-weight: 730;
+  letter-spacing: -0.85px;
+  color: var(--navy);
+}
+h2,
+h3 {
+  color: var(--navy);
+}
+button {
+  border-color: #d5deeb;
+  border-radius: 8px;
+}
+button:hover {
+  background: #edf2fa;
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 3px solid #b18019;
+  outline-offset: 3px;
+}
+.primary {
+  color: #11203d;
+  border-color: #dfaa36;
+  background: linear-gradient(180deg, #f9d777, #efba3f);
+  box-shadow: 0 2px 7px rgba(155, 108, 18, 0.1);
+  font-weight: 650;
+}
+.primary:hover {
+  background: linear-gradient(180deg, #ffe194, #f5c651);
+}
+.dark {
+  background: var(--navy);
+  border-color: var(--navy);
+}
+.eyebrow {
+  color: #3c5d89;
+}
+.sidebar {
+  background:
+    radial-gradient(
+      ellipse at 100% 0%,
+      rgba(34, 108, 208, 0.27),
+      transparent 44%
+    ),
+    radial-gradient(
+      ellipse at 0% 100%,
+      rgba(226, 166, 42, 0.06),
+      transparent 38%
+    ),
+    linear-gradient(170deg, #0c244b, #061329 74%);
+  border-right: 1px solid #20365a;
+  box-shadow: 4px 0 22px rgba(7, 22, 48, 0.06);
+}
+.brandmark {
+  border-color: #d9b757;
+  color: #fff6dc;
+  background: linear-gradient(145deg, #1f4e83, #0b1b37 68%);
+  box-shadow:
+    inset 0 0 0 2px #29446b,
+    0 0 10px rgba(239, 188, 62, 0.1);
+  font-style: italic;
+  font-weight: 750;
+}
+.brandmark:before {
+  background: #eac779;
+}
+.brandtext {
+  letter-spacing: 0.4px;
+}
+.brandtext span {
+  letter-spacing: 0;
+}
+.sidebar .brandtext span {
+  color: #a5b7d1;
+}
+.navlabel {
+  color: #a0b0ca;
+}
+.nav button {
+  color: #c0cee1;
+}
+.nav button.active {
+  color: #fff9e6;
+  background: linear-gradient(
+    90deg,
+    rgba(240, 188, 62, 0.13),
+    rgba(41, 76, 124, 0.3)
+  );
+  box-shadow: inset 3px 0 var(--show-gold);
+}
+.nav button.active .ico {
+  color: #f4ca6c;
+}
+.nav button:hover {
+  background: #19365e;
+}
+.sidebar-bottom {
+  border-color: #2a3c59;
+}
+.sidebar-bottom strong {
+  color: #eef2f9;
+}
+.sidebar-bottom .seal {
+  color: #d3ba7a;
+}
+.topbar {
+  border-top: 2px solid var(--show-gold);
+  border-bottom-color: #dce3ef;
+  box-shadow: 0 2px 12px rgba(19, 43, 79, 0.025);
+}
+.avatar {
+  color: #e9cb84;
+  background: #10284f;
+}
+.badge {
+  border-color: #d6dfeb;
+  color: #49617e;
+  background: #f3f6fb;
+}
+.badge.demo {
+  background: #fff4d7;
+  border-color: #ead39d;
+  color: #7c5b1d;
+}
+.card {
+  border-color: #dce3ee;
+  border-radius: 10px;
+  box-shadow: var(--show-shadow);
+}
+.cardhead h2 {
+  letter-spacing: -0.2px;
+}
+.metric {
+  border-color: #dce3ee;
+  border-radius: 9px;
+  box-shadow: 0 3px 16px rgba(12, 31, 62, 0.025);
+}
+.metric-value {
+  color: #102b54;
+  font-weight: 700;
+}
+.metric-icon {
+  color: #8a9db9;
+}
+.metric.student {
+  border-top-color: var(--teal);
+}
+.metric.staff {
+  border-top-color: var(--orange);
+}
+.metric-label {
+  color: #64758e;
+}
+.banner {
+  background: #eef3fa;
+  border-color: #d5e0ef;
+  color: #344e70;
+}
+.banner.warn {
+  background: #fff7e5;
+  border-color: #ebd6a5;
+  color: #775c25;
+}
+.analysis-basis {
+  border-left: 3px solid var(--show-gold);
+}
+.tolerance-toolbar {
+  border-left: 3px solid #466d9d;
+}
+.frequency-toolbar {
+  background: #f4f6fa;
+}
+input,
+select {
+  border-color: #cfdae9;
+}
+input[type="range"] {
+  accent-color: #c08a1d;
+}
+.fisher-x-controls input[type="range"],
+.reveal input,
+.control input[type="range"] {
+  accent-color: #c08a1d;
+}
+th {
+  color: #4f6585;
+  background: #eff3f9;
+  border-bottom-color: #d2ddec;
+}
+td {
+  border-bottom-color: #e8edf5;
+}
+tbody tr:hover {
+  background: #f7f9fd;
+}
+.cross .total,
+.fisher-table .margin-cell {
+  background: #edf2f8;
+}
+.cross .goodrow td {
+  background: #eff8f5;
+}
+.chart text {
+  fill: #63758b;
+}
+.chartfooter {
+  border-color: #e1e7ef;
+  color: #657892;
+}
+.tabs {
+  background: #e9eef6;
+}
+.tabs button {
+  color: #60738f;
+}
+.tabs button.selected {
+  background: #102c56;
+  color: #fff4d2;
+  box-shadow:
+    inset 0 -2px var(--show-gold),
+    0 1px 4px #122e5112;
+}
+.group-choice .selected {
+  color: #163b6a;
+  border-color: #91aaca;
+  background: #eaf0fa;
+}
+.ranknum {
+  color: #4b6384;
+  background: #eaf0f8;
+}
+.ranknum.top1 {
+  color: #7f5b12;
+  background: #fce9ae;
+  box-shadow: inset 0 0 0 1px #e6cd87;
+}
+.ranknum.top2 {
+  color: #526984;
+  background: #e4eaf3;
+}
+.ranknum.top3 {
+  color: #976d45;
+  background: #f3e4d5;
+}
+.participant-shell {
+  background:
+    radial-gradient(
+      ellipse at 15% 0%,
+      rgba(61, 113, 195, 0.09),
+      transparent 48%
+    ),
+    radial-gradient(
+      ellipse at 95% 20%,
+      rgba(233, 180, 63, 0.055),
+      transparent 40%
+    ),
+    #f5f7fb;
+}
+.participant-nav {
+  background: #ffffffed;
+  border-top: 2px solid var(--show-gold);
+  border-bottom-color: #dae2ee;
+}
+.target {
+  color: #102d58;
+  font-weight: 760;
+  font-style: italic;
+  text-shadow: 0 2px 0 #c6d2e3;
+}
+.target-label {
+  color: #6b7f9d;
+}
+.timerbutton {
+  color: #102342;
+  border-color: #f9dfa1;
+  background: linear-gradient(150deg, #ffe395, #efb936);
+  box-shadow:
+    0 0 0 1px #d0a13b,
+    0 5px 20px rgba(172, 123, 23, 0.12);
+  font-weight: 750;
+}
+.timerbutton:hover {
+  background: #f6cc65;
+}
+.timerbutton.stop {
+  color: #fff7df;
+  background: #102b54;
+  border-color: #d8c48e;
+  box-shadow: 0 0 0 1px #8b7742;
+}
+.timerbutton.stop:hover {
+  background: #183a69;
+}
+.result {
+  color: #143c72;
+}
+.login {
+  border-top: 3px solid var(--show-gold);
+}
+.login .primary {
+  color: #11203d;
+}
+.personal-kpis div {
+  border-color: #dce3ee;
+  box-shadow: var(--show-shadow);
+}
+.presentation {
+  background:
+    radial-gradient(
+      ellipse at 2% 0%,
+      rgba(56, 110, 194, 0.06),
+      transparent 36%
+    ),
+    radial-gradient(
+      ellipse at 98% 0%,
+      rgba(236, 184, 56, 0.035),
+      transparent 32%
+    ),
+    #f8fafd;
+  border-top: 3px solid var(--show-gold);
+}
+.presentation .preshead {
+  border-bottom: 2px solid #d9b868;
+}
+.presentation h1 {
+  color: #102b54;
+  font-weight: 740;
+}
+.presentation .card {
+  background: #fff;
+}
+.presentation .fisher-lab .card {
+  border-color: #dce3ee;
+}
+.presentation .metric-value {
+  color: #102b54;
+}
+.fisher-path {
+  background: #f8faff;
+  border-top: 2px solid #dfbd67;
+}
+.fisher-steps .selected {
+  color: #fff3cf;
+  border-color: #c8a34c;
+  background: #132f59;
+}
+.fisher-steps button.selected span {
+  color: #f3cd72;
+}
+.fisher-parameters div {
+  background: #eef2f8;
+}
+.fisher-parameters b {
+  color: #183963;
+}
+.fisher-result {
+  color: #123d73;
+}
+.fisher-probability-list .included-event {
+  background: #fff4d8;
+}
+.fisher-probability-list .selected-probability {
+  outline-color: #426894;
+}
+.hypotheses > div {
+  background: #f6f8fc;
+  border-color: #dce3ee;
+}
+.hypotheses .eyebrow {
+  color: #315886;
+}
+.fisher-sum {
+  background: #f5f8fc;
+  border-color: #dce3ee;
+}
+.single-value-note {
+  background: #edf2f9;
+}
+#toast {
+  background: #10284e;
+  border: 1px solid #a58d51;
+}
+.loading {
+  color: #133e76;
+}
+@media print {
+  body,
+  .participant-shell,
+  .presentation {
+    background: white;
+  }
+  .card,
+  .metric,
+  .personal-kpis div {
+    box-shadow: none;
+  }
+}
+.note,
+.privacy,
+.metric-note,
+.footer {
+  color: #60728b;
+}
+.group {
+  color: #0d7772;
+}
+.group.staff {
+  color: #93691f;
+}
+/* Ready for the unmodified source image in the existing brand area. */
+.brand-logo {
+  display: block;
+  width: 160px;
+  max-width: 100%;
+  height: 52px;
+  object-fit: contain;
+  object-position: left center;
+}

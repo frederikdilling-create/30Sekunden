@@ -120,26 +120,118 @@ function logChoose(n, k) {
     s += Math.log(n - i + 1) - Math.log(i);
   return s;
 }
+// Fisher conditions on both margins. X counts good estimates in the chosen group.
+export function fisherParameters(t, group = "student") {
+  if (!["student", "staff"].includes(group))
+    throw new RangeError("Unbekannte Gruppe.");
+  if (![t.a, t.b, t.c, t.d].every((x) => Number.isSafeInteger(x) && x >= 0))
+    throw new RangeError(
+      "Die Vierfeldertafel benötigt nichtnegative ganze Häufigkeiten.",
+    );
+  const N = t.a + t.b + t.c + t.d,
+    K = t.a + t.b;
+  const nStudent = t.a + t.c,
+    nStaff = t.b + t.d;
+  const n = group === "student" ? nStudent : nStaff;
+  return {
+    N,
+    K,
+    n,
+    nStudent,
+    nStaff,
+    group,
+    observed: group === "student" ? t.a : t.b,
+    min: Math.max(0, n - (N - K)),
+    max: Math.min(n, K),
+    expected: N ? (n * K) / N : null,
+    testable: nStudent > 0 && nStaff > 0,
+    informative: nStudent > 0 && nStaff > 0 && K > 0 && K < N,
+  };
+}
+export function fisherTableAt(model, x) {
+  if (!Number.isInteger(x) || x < model.min || x > model.max)
+    throw new RangeError(
+      "Diese Tafel ist bei den festen Randsummen nicht möglich.",
+    );
+  const a = model.group === "student" ? x : model.K - x;
+  const b = model.K - a;
+  return { a, b, c: model.nStudent - a, d: model.nStaff - b };
+}
+function logSum(values) {
+  if (!values.length) return -Infinity;
+  const maximum = values.reduce(
+    (maximum, x) => Math.max(maximum, x),
+    -Infinity,
+  );
+  return (
+    maximum +
+    Math.log(values.reduce((sum, x) => sum + Math.exp(x - maximum), 0))
+  );
+}
+export function hypergeometric(t, group = "student") {
+  const model = fisherParameters(t, group),
+    { N, K, n, min, max } = model;
+  // A recurrence and log-sum-exp avoid factorial overflow and preserve tiny tails.
+  let logP = logChoose(K, min) + logChoose(N - K, n - min) - logChoose(N, n);
+  const points = [];
+  for (let x = min; x <= max; x++) {
+    points.push({ x, logProbability: logP });
+    if (x < max)
+      logP +=
+        Math.log(K - x) +
+        Math.log(n - x) -
+        Math.log(x + 1) -
+        Math.log(N - K - n + x + 1);
+  }
+  const normalizer = logSum(points.map((p) => p.logProbability));
+  for (const point of points) {
+    point.logProbability -= normalizer;
+    point.probability = Math.exp(point.logProbability);
+  }
+  return { ...model, points };
+}
+export function probabilityEvent(
+  model,
+  {
+    kind = "single",
+    x = model.observed,
+    lower = model.min,
+    upper = model.max,
+    side = "two",
+  } = {},
+) {
+  const observed = model.points.find((p) => p.x === model.observed);
+  if (!["single", "left", "right", "interval", "fisher"].includes(kind))
+    throw new RangeError("Unbekanntes Ereignis.");
+  const selected = model.points.filter((p) => {
+    if (kind === "single") return p.x === x;
+    if (kind === "left") return p.x <= x;
+    if (kind === "right") return p.x >= x;
+    if (kind === "interval") return p.x >= lower && p.x <= upper;
+    // Left/right always refer to p_Studierende − p_Mitarbeitende,
+    // so changing the illustrative group must reverse the inequality.
+    if (side === "left")
+      return model.group === "student"
+        ? p.x <= model.observed
+        : p.x >= model.observed;
+    if (side === "right")
+      return model.group === "student"
+        ? p.x >= model.observed
+        : p.x <= model.observed;
+    return p.logProbability <= observed.logProbability + 1e-10;
+  });
+  const logProbability = logSum(selected.map((p) => p.logProbability));
+  return {
+    xs: selected.map((p) => p.x),
+    logProbability,
+    probability: Math.min(1, Math.exp(logProbability)),
+  };
+}
 export function fisher(t, side = "two") {
-  const { a, b, c, d } = t,
-    n = a + b + c + d,
-    n1 = a + c,
-    k = a + b;
-  if (!n1 || n1 === n) return null;
-  const lp = (x) =>
-      logChoose(k, x) + logChoose(n - k, n1 - x) - logChoose(n, n1),
-    obs = lp(a);
-  let p = 0;
-  for (let x = Math.max(0, n1 - (n - k)); x <= Math.min(n1, k); x++)
-    if (
-      side === "left"
-        ? x <= a
-        : side === "right"
-          ? x >= a
-          : lp(x) <= obs + 1e-10
-    )
-      p += Math.exp(lp(x));
-  return Math.min(1, p);
+  const model = hypergeometric(t);
+  return model.testable
+    ? probabilityEvent(model, { kind: "fisher", side }).probability
+    : null;
 }
 export function permute(t, rng = Math.random) {
   const n1 = t.a + t.c,

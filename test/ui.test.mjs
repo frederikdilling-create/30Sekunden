@@ -6,11 +6,14 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { parseHTML } from "linkedom";
 import * as stats from "../public/stats.js";
+import * as fisherUI from "../public/fisher-lab.js";
 
 const source = readFileSync(
   new URL("../public/app.js", import.meta.url),
   "utf8",
-).replace(/^import[\s\S]*?from "\.\/stats.js";/, "");
+)
+  .replace(/^import[\s\S]*?from "\.\/stats.js";/, "")
+  .replace(/import[\s\S]*?from "\.\/fisher-lab.js";/, "");
 async function settled(check) {
   for (let i = 0; i < 100; i++) {
     if (check()) return;
@@ -125,6 +128,7 @@ function fixture() {
     }
     const context = vm.createContext({
       ...stats,
+      ...fisherUI,
       document,
       window: win,
       fetch,
@@ -326,4 +330,133 @@ test("Erfolgreiches Login wechselt auch bei fokussiertem Formular in das Dashboa
   ui.submit("#login-form");
   await settled(() => ui.query(".sidebar"));
   assert.equal(ui.query("#login-form"), null);
+});
+
+test("Fisher-Labor: Tafeln, Diagramm, kumulierte Ereignisse und p-Wert live auf zwei Ansichten", async () => {
+  const { client, store } = fixture();
+  store.settings.presentation = "simulation";
+  store.settings.fisherStep = 1;
+  store.settings.fisherGroup = "student";
+  store.settings.fisherEvent = "single";
+  store.rows = [];
+  for (const [group, count, seconds] of [
+    ["student", 1, 30],
+    ["student", 11, 40],
+    ["staff", 9, 30],
+    ["staff", 3, 40],
+  ])
+    for (let i = 0; i < count; i++)
+      store.rows.push({
+        id: `${group}-${seconds}-${i}`,
+        participant: `${group}-${seconds}-${i}`,
+        nickname: "Test",
+        group,
+        attempt: 1,
+        seconds,
+        valid: 1,
+        created: "2026-01-01T00:00:00Z",
+      });
+  const original = store.rows.map((x) => x.seconds);
+  const admin = client(),
+    projection = client({ admin: false });
+  await settled(() => admin.query(".present-list"));
+  await admin.slide("Fisher-Labor");
+  await settled(
+    () => admin.query(".fisher-path") && projection.query(".fisher-path"),
+  );
+  assert.equal(admin.query('[data-probability="fisher"]'), null);
+  admin.click('[data-fisher-step="4"]');
+  await settled(() => projection.query('[data-probability="single"]'));
+  assert.equal(admin.document.querySelectorAll(".probability-bar").length, 11);
+  admin.change('input[type="number"][data-setting="fisherX"]', "0");
+  await settled(
+    () =>
+      projection.query(".fisher-possible .focus-cell strong")?.textContent ===
+      "0",
+  );
+  assert.equal(
+    admin.query(".fisher-possible .focus-cell strong").textContent,
+    "0",
+  );
+  admin.click('.probability-bar[data-fisher-x="1"]');
+  await settled(
+    () =>
+      projection.query(".fisher-possible .focus-cell strong")?.textContent ===
+      "1",
+  );
+  admin.click('[data-fisher-step="5"]');
+  await settled(() => admin.query('[data-setting="fisherEvent"]'));
+  admin.change('[data-setting="fisherEvent"]', "left");
+  await settled(
+    () =>
+      projection.query(".fisher-event-expression")?.textContent === "P(X ≤ 1)",
+  );
+  assert.equal(
+    admin.query('[data-probability="event"]').textContent,
+    "0,00137973",
+  );
+  assert.equal(projection.document.querySelectorAll(".event-bar").length, 2);
+  admin.change('[data-setting="fisherEvent"]', "interval");
+  await settled(() => admin.query('[data-setting="fisherUpper"]'));
+  admin.change('[data-setting="fisherUpper"]', "1");
+  await settled(
+    () =>
+      projection.query(".fisher-event-expression")?.textContent ===
+      "P(0 ≤ X ≤ 1)",
+  );
+  admin.click('[data-fisher-step="6"]');
+  await settled(() => projection.query('[data-probability="fisher"]'));
+  assert.equal(
+    projection.query('[data-probability="fisher"]').textContent,
+    "p = 0,00275946",
+  );
+  assert.equal(projection.document.querySelectorAll(".event-bar").length, 4);
+  admin.click('.probability-bar[data-fisher-x="5"]');
+  await settled(
+    () =>
+      projection.query(".selected-bar")?.getAttribute("x") ===
+      admin.query(".selected-bar")?.getAttribute("x"),
+  );
+  assert.equal(
+    admin.query('[data-probability="fisher"]').textContent,
+    "p = 0,00275946",
+  );
+  assert.deepEqual(
+    store.rows.map((x) => x.seconds),
+    original,
+  );
+  assert.equal(projection.query('[data-setting="fisherX"]'), null);
+  assert.equal(projection.query('.probability-bar[role="button"]'), null);
+  admin.click('[data-fisher-step="2"]');
+  await settled(() => admin.query('[data-setting="side"]'));
+  admin.change('[data-setting="side"]', "left");
+  await settled(() => store.settings.side === "left");
+  admin.click('[data-fisher-step="6"]');
+  await settled(
+    () =>
+      admin.query('[data-probability="fisher"]')?.textContent ===
+      "p = 0,00137973",
+  );
+  admin.change('[data-setting="fisherGroup"]', "staff");
+  await settled(
+    () =>
+      projection.query(".fisher-p-card .fisher-event-expression")
+        ?.textContent === "P(X ≥ 9)",
+  );
+  assert.equal(
+    projection.query('[data-probability="fisher"]').textContent,
+    "p = 0,00137973",
+  );
+  admin.click('[data-fisher-step="7"]');
+  await settled(
+    () =>
+      projection.query(".fisher-decision h2")?.textContent === "H₀ verwerfen",
+  );
+  admin.change('[data-setting="alpha"]', "0.001");
+  await settled(
+    () =>
+      projection.query(".fisher-decision h2")?.textContent ===
+      "H₀ nicht verwerfen",
+  );
+  assert.match(projection.query(".fisher-decision").textContent, /kein Beweis/);
 });

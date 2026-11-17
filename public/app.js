@@ -4,11 +4,10 @@ import {
   table,
   frequencies,
   difference,
-  extreme,
-  fisher,
   ranking,
   good,
 } from "./stats.js";
+import { renderFisherLab, fisherDecision } from "./fisher-lab.js";
 const $ = (s) => document.querySelector(s),
   app = $("#app"),
   params = new URLSearchParams(location.search),
@@ -58,9 +57,6 @@ let id = params.get("e"),
   measureAttempt = "all",
   sort = "created",
   sortDir = -1,
-  sim = [],
-  lastSim = null,
-  simKey = "",
   presIndex = 0,
   presFollow = false;
 let identity = JSON.parse(localStorage.getItem("challenge-identities") || "{}"),
@@ -182,7 +178,7 @@ const navItems = [
   ["measurements", "≋", "Live-Messungen"],
   ["descriptive", "▥", "Deskriptive Statistik"],
   ["contingency", "⊞", "Vierfeldertafel"],
-  ["simulation", "⤨", "Simulationslabor"],
+  ["simulation", "⊞", "Fisher-Labor"],
   ["ranking", "♧", "Bestenliste"],
   ["settings", "⚙", "Einstellungen"],
   ["export", "↧", "Datenexport"],
@@ -529,6 +525,7 @@ function descriptives() {
     head(
       "Deskriptive Statistik",
       "Metrische Daten erkunden und die beiden Gruppen vergleichen.",
+      '<button class="primary" data-view="simulation">Fisher-Test erläutern →</button>',
     ) +
     basis() +
     `<div class="card"><div class="cardhead"><div><h2>Verteilungen im Vergleich</h2><p>Mit der Maus über Messwerte fahren, um Details anzuzeigen.</p></div>${chartTools()}</div><div class="filters">${[
@@ -594,83 +591,23 @@ function contingency() {
       `<button data-view="presentation" data-slide="contingency">▷ Großansicht</button>`,
     ) +
     basis() +
-    `<div class="grid"><div><div class="card"><div class="cardhead"><div><h2>Gute und schlechte Schätzungen</h2><p>Eine gute Schätzung liegt innerhalb des geschlossenen Toleranzintervalls.</p></div></div>${frequencyControl()}${crossTable()}${shares()}</div>${categoryCharts()}</div><div>${toleranceCard()}<div class="card"><h2>Der nächste Schritt</h2><p class="note">Ist die beobachtete Differenz mit zufälliger Variation unter gleicher Erfolgswahrscheinlichkeit vereinbar?</p><button class="primary" data-view="simulation">Simulationslabor öffnen →</button></div></div></div>`
+    `<div class="grid"><div><div class="card"><div class="cardhead"><div><h2>Gute und schlechte Schätzungen</h2><p>Eine gute Schätzung liegt innerhalb des geschlossenen Toleranzintervalls.</p></div></div>${frequencyControl()}${crossTable()}${shares()}</div>${categoryCharts()}</div><div>${toleranceCard()}<div class="card"><h2>Unabhängigkeit exakt prüfen</h2><p class="note">Wie wahrscheinlich ist diese Tafel unter H₀? Erkunde mögliche Tafeln, hypergeometrische Einzelwahrscheinlichkeiten und den exakten Fisher-p-Wert.</p><button class="primary" data-view="simulation">Fisher-Labor öffnen →</button></div></div></div>`
   );
 }
-function simHistogram(z, obs, side, reveal) {
-  const bins = Array(31).fill(0),
-    tails = Array(31).fill(0);
-  for (const x of sim) {
-    const i = Math.max(0, Math.min(30, Math.round((x + 1) * 15)));
-    bins[i]++;
-    if (extreme(x, obs, side)) tails[i]++;
-  }
-  const top = Math.max(1, ...bins);
-  let s = "";
-  for (let i = 0; i < 31; i++) {
-    const h = (bins[i] / top) * 155,
-      th = reveal >= 6 ? (tails[i] / top) * 155 : 0;
-    s += `<rect x="${60 + i * 21}" y="${185 - h}" width="19" height="${h}" fill="#98bcb8"/><rect x="${60 + i * 21}" y="${185 - th}" width="19" height="${th}" fill="#d4a057"><title>${bins[i]} Simulationen</title></rect>`;
-  }
-  if (reveal >= 5 && obs != null)
-    for (const v of side === "two" ? [Math.abs(obs), -Math.abs(obs)] : [obs])
-      s += `<line x1="${69 + (v + 1) * 315}" x2="${69 + (v + 1) * 315}" y1="15" y2="190" stroke="#c68b3f" stroke-width="2" stroke-dasharray="5 3"/><text x="${69 + (v + 1) * 315}" y="12" text-anchor="middle">${fmt(v * 100, 1)} pp</text>`;
-  for (let i = 0; i <= 4; i++)
-    s += `<text x="${69 + i * 157.5}" y="209" text-anchor="middle">${-100 + i * 50}</text>`;
-  s += `<text x="390" y="232" text-anchor="middle">Differenz der Anteile in Prozentpunkten · Studierende − Mitarbeitende</text>`;
-  return chartSVG(s, 245);
-}
 function simulationContent() {
-  const s = state.experiment.settings,
-    t = s.lockedTolerance ?? s.tolerance,
-    z = table(activeRows(), t),
-    obs = difference(z),
-    key = JSON.stringify([z, s.side, s.mode, t]);
-  if (key !== simKey) {
-    sim = [];
-    lastSim = null;
-    simKey = key;
-  }
-  if (state.simulation?.key === key) {
-    sim = state.simulation.values;
-    lastSim = state.simulation.last;
-  } else {
-    sim = [];
-    lastSim = null;
-  }
-  const reveal = s.reveal,
-    k = sim.filter((x) => extreme(x, obs, s.side)).length,
-    p = (k + 1) / (sim.length + 1),
-    exact = fisher(z, s.side),
-    labels = [
-      "Beobachtete Tafel",
-      "Nullhypothese",
-      "Einzelne Neuzuordnung",
-      "Simulationsverteilung",
-      "Beobachtete Teststatistik",
-      "Extreme Ergebnisse",
-      "Approximierter p-Wert",
-      "Exakter p-Wert",
-      "Testentscheidung",
-    ];
-  return `${s.mode !== "first" ? '<div class="alert">Explorative Auswertung: Für den primären Signifikanztest den ersten gültigen Versuch pro Person wählen.</div>' : ""}${!s.simulation ? '<div class="banner warn">Das Modul ist für die Präsentation noch nicht freigegeben. Freigabe in den Einstellungen.</div>' : ""}<div class="card"><div class="cardhead"><div><h2>Schritt für Schritt zur statistischen Entscheidung</h2><p>Stufe ${reveal} von 9 · ${labels[reveal - 1]}</p></div><span class="badge">Testtoleranz ± ${fmt(t, 1)} s ${s.lockedTolerance != null ? "· fixiert" : "· explorativ"}</span></div><div class="stepper">${labels.map((_, i) => `<span class="${i < reveal ? "on" : ""}"></span>`).join("")}</div><div class="reveal"><span>Einblenden</span><input type="range" min="1" max="9" step="1" value="${reveal}" data-setting="reveal" aria-label="Didaktische Stufe"><span>${reveal}/9</span></div></div><div class="grid"><div><div class="card"><h2>Beobachtete Vierfeldertafel</h2>${crossTable("absolute", t)}${reveal >= 2 ? '<div class="divider"></div><h3>H₀: Gleiche Wahrscheinlichkeit einer guten Schätzung</h3><p class="note">H₁: ' + (s.side === "two" ? "Die Wahrscheinlichkeiten unterscheiden sich." : s.side === "left" ? "Studierende haben eine geringere Erfolgswahrscheinlichkeit." : "Studierende haben eine höhere Erfolgswahrscheinlichkeit.") + "</p>" : ""}${reveal >= 5 ? `<div class="tolerance-number">${fmt(obs == null ? null : obs * 100, 2)} <small>Prozentpunkte beobachtete Differenz</small></div>` : ""}</div>${reveal >= 3 ? `<div class="card"><div class="cardhead"><div><h2>Zufällige Neuzuordnung unter H₀</h2><p>Gruppengrößen und Gesamtzahl guter Schätzungen bleiben konstant.</p></div></div><div class="actions">${[1, 10, 100, 1000, 10000].map((n) => `<button class="small ${n === 1000 ? "primary" : ""}" data-sim="${n}" ${obs == null ? "disabled" : ""}>${n.toLocaleString("de-DE")} ${n === 1 ? "Simulation" : "Simulationen"}</button>`).join("")}<button class="small" data-action="reset-sim">Zurücksetzen</button></div>${lastSim ? `<div class="symbols" aria-label="Letzte zufällige Zuordnung">${["a", "c", "b", "d"].map((key) => Array.from({ length: Math.min(150, lastSim[key]) }, () => `<span title="${["a", "c"].includes(key) ? "Studierende" : "Mitarbeitende"} · ${["a", "b"].includes(key) ? "Gut" : "Schlecht"}" class="symbol ${["a", "b"].includes(key) ? "good" : ""} ${["b", "d"].includes(key) ? "staff" : ""}"></span>`).join("")).join("")}</div><p class="note">Letzte simulierte Tafel: gut (${lastSim.a} | ${lastSim.b}), schlecht (${lastSim.c} | ${lastSim.d}). Teststatistik: ${fmt(difference(lastSim) * 100, 2)} pp. Symbolanzeige auf 150 je Zelle begrenzt.</p>` : '<div class="empty">Starte eine Simulation und beobachte die zufällige Zuordnung.</div>'}</div>` : ""}${reveal >= 4 ? `<div class="card"><div class="cardhead"><div><h2>Die Nullverteilung entsteht</h2><p>${sim.length.toLocaleString("de-DE")} zufällige Neuzuordnungen</p></div>${chartTools()}</div>${simHistogram(z, obs, s.side, reveal)}${reveal >= 6 ? '<p class="note">Gold: mindestens so extrem wie beobachtet. Zweiseitig bedeutet |D*| ≥ |D beobachtet|.</p>' : ""}</div>` : ""}</div><div><div class="card"><h2>Test konfigurieren</h2><label>Alternativhypothese</label><select data-setting="side" style="width:100%">${[
-    ["two", "Zweiseitig"],
-    ["left", "Linksseitig (Studierende < Mitarbeitende)"],
-    ["right", "Rechtsseitig (Studierende > Mitarbeitende)"],
-  ]
-    .map(
-      ([k, v]) =>
-        `<option value="${k}" ${s.side === k ? "selected" : ""}>${v}</option>`,
-    )
-    .join(
-      "",
-    )}</select><label>Signifikanzniveau α</label><input type="number" data-setting="alpha" min="0.001" max="0.5" step="0.01" value="${s.alpha}"><p class="note">Standard: α = 0,05 (5 %).</p>${reveal >= 7 ? `<div class="divider"></div><h3>Monte-Carlo-Ergebnis</h3><div class="sim-values" style="grid-template-columns:1fr 1fr"><div><small>Simulationen B</small>${sim.length}</div><div><small>Extreme Ergebnisse k</small>${k}</div></div><p class="note">Relativer Anteil k/B: <b>${sim.length ? fmt(k / sim.length, 4) : "–"}</b></p><div class="tolerance-number">${sim.length ? fmt(p, 4) : "–"} <small>approximierter p-Wert</small></div><p class="note">Monte-Carlo-Korrektur: (k + 1)/(B + 1). ${sim.length ? "Monte-Carlo-Standardfehler ≈ " + fmt(Math.sqrt((p * (1 - p)) / (sim.length + 1)), 4) : "Zunächst Simulationen durchführen."}</p>` : ""}${reveal >= 8 ? `<div class="divider"></div><h3>Exakter Fisher-Test</h3><div class="tolerance-number">${fmt(exact, 4)}</div><p class="note">Zweiseitig: Summe der Wahrscheinlichkeiten aller Tafeln, die unter den fixierten Rändern höchstens so wahrscheinlich wie die beobachtete Tafel sind. Diese Definition kann vom zweiseitigen Permutationstest mit |D| abweichen.</p>` : ""}${reveal >= 9 ? `<div class="divider"></div><h3>Statistische Testentscheidung (exakt)</h3><p class="note">${exact == null ? "Beide Gruppen benötigen gültige Messungen." : exact <= s.alpha ? `p ≤ α: H₀ wird auf dem Niveau ${pct(s.alpha)} verworfen.` : `p > α: H₀ wird auf dem Niveau ${pct(s.alpha)} nicht verworfen. Dies beweist H₀ nicht.`}</p>` : ""}</div><div class="card"><h2>Methodisch einordnen</h2><p class="note">Die Permutation setzt Austauschbarkeit unter H₀ voraus. Die Gruppenzugehörigkeit wurde nicht randomisiert: Störvariablen können Unterschiede erklären. Eine Gelegenheitsstichprobe erlaubt weder kausale Schlussfolgerungen noch eine uneingeschränkte Verallgemeinerung.</p><p class="note">Ein p-Wert beschreibt die Wahrscheinlichkeit mindestens ebenso extremer Ergebnisse unter H₀ und den Modellannahmen. Er ist keine Wahrscheinlichkeit dafür, dass H₀ wahr ist.</p></div></div></div>`;
+  const settings = state.experiment.settings;
+  return renderFisherLab({
+    counts: table(activeRows(), settings.lockedTolerance ?? settings.tolerance),
+    settings,
+    admin: state.admin,
+    chartTools: chartTools(),
+  });
 }
 function simulations() {
   return (
     head(
-      "Simulationslabor",
-      "Wie überraschend ist unser beobachteter Unterschied unter der Nullhypothese?",
+      "Fisher-Labor",
+      "Unabhängigkeit prüfen – von der beobachteten Vierfeldertafel zum exakten Test.",
     ) +
     basis() +
     simulationContent()
@@ -722,11 +659,6 @@ function settingsPage() {
         "Messungen können durchgeführt und eingereicht werden.",
       ],
       [
-        "simulation",
-        "Simulationslabor freigeben",
-        "Das Modul wird für die Präsentation verfügbar.",
-      ],
-      [
         "publicPresentation",
         "Öffentliche Projektion freigeben",
         "Lesender Zugriff auf die präsentierten Messdaten mit Pseudonymen. Steuerung bleibt bei der Administration.",
@@ -738,7 +670,7 @@ function settingsPage() {
       )
       .join(
         "",
-      )}<div class="settingrow"><div><b>Maximale Versuche pro Person</b><p>0 bedeutet unbegrenzt. Ungültige Versuche zählen mit.</p></div><input type="number" data-setting="maxAttempts" min="0" max="100" value="${s.maxAttempts}" aria-label="Maximale Versuche"></div><div class="settingrow"><div><b>Auswertungsstand einfrieren</b><p>Die Erhebung läuft weiter; Auswertungen verwenden die gesicherte Kopie.</p></div><button class="small" data-action="freeze">Stand jetzt sichern</button></div><div class="settingrow"><div><b>Eingefrorenen Datenstand verwenden</b><p>Zurück zu Live-Daten wechseln, ohne die Kopie zu löschen.</p></div><input type="checkbox" data-setting="frozen" ${s.frozen ? "checked" : ""} aria-label="Eingefrorene Daten verwenden"></div></div><div class="card"><h2>Veranstaltungen</h2><label>Frühere Veranstaltung öffnen</label><select id="experiment-picker" style="width:100%">${status.experiments.map((x) => `<option value="${x.id}" ${x.id === id ? "selected" : ""}>${esc(x.name)} ${x.demo ? "[DEMO]" : ""} · ${x.id}</option>`).join("")}</select><form id="new-experiment"><label for="experiment-name">Neue Veranstaltung</label><input id="experiment-name" name="name" placeholder="z. B. Lehrprobe · November 2026" required maxlength="100" style="width:100%"><label><input type="checkbox" name="demo"> Getrennte Demo-Veranstaltung</label><button class="primary" style="margin-top:12px">Veranstaltung anlegen</button></form></div><div class="card"><h2>Experiment neu starten</h2><p class="note">Löscht alle Messungen, Simulationen und den eingefrorenen Stand. Angemeldete Personen und Teilnahmelink bleiben erhalten. Anmeldung und Messphase werden geöffnet.</p><button class="danger" data-action="restart">↻ Experiment neu starten …</button></div><div class="card"><h2>Datenbestand vollständig löschen</h2><p class="note">Löscht alle Personen, Messungen und den eingefrorenen Stand dieser Veranstaltung dauerhaft. Andere Veranstaltungen bleiben erhalten.</p><button class="danger" data-action="reset-data">Daten löschen …</button></div></div><div>${toleranceCard()}<div class="card"><h2>Teilnahmelink</h2><img src="${endpoint("qr")}" alt="QR-Code zum Teilnahmelink" style="width:170px;display:block;margin:20px auto"><p class="note" style="word-break:break-all">${esc(location.origin + "/?e=" + id + "&view=participate")}</p><button class="small" data-action="copy">Link kopieren</button><p class="note" style="margin-top:18px">Öffentliche Projektion (nach Freigabe):<br><a href="/?e=${id}&view=presentation" target="_blank" rel="noopener">Projektionsansicht öffnen ↗</a></p></div>${e.demo ? `<div class="card"><span class="badge demo">DEMO · strikt getrennt</span><h2 style="margin-top:15px">Beispieldaten erzeugen</h2><form id="demo-form"><label for="demo-n">Anzahl Personen (2–500)</label><input id="demo-n" name="n" type="number" min="2" max="500" value="60"><label for="demo-share">Anteil Studierende (%)</label><input id="demo-share" name="share" type="number" min="0" max="100" value="60"><button class="primary" style="margin-top:20px">Demo-Datensatz erzeugen</button></form><p class="note" style="margin-top:15px">Ein normalverteilter Versuch pro Person. Bestehende Demo-Daten vorher zurücksetzen.</p></div>` : '<div class="card"><h2>Für die Lehrprobe üben</h2><p class="note">Lege eine neue Veranstaltung mit aktivierter Demo-Option an. Beispieldaten können niemals in reale Veranstaltungen geschrieben werden.</p></div>'}</div></div>`
+      )}<div class="settingrow"><div><b>Maximale Versuche pro Person</b><p>0 bedeutet unbegrenzt. Ungültige Versuche zählen mit.</p></div><input type="number" data-setting="maxAttempts" min="0" max="100" value="${s.maxAttempts}" aria-label="Maximale Versuche"></div><div class="settingrow"><div><b>Auswertungsstand einfrieren</b><p>Die Erhebung läuft weiter; Auswertungen verwenden die gesicherte Kopie.</p></div><button class="small" data-action="freeze">Stand jetzt sichern</button></div><div class="settingrow"><div><b>Eingefrorenen Datenstand verwenden</b><p>Zurück zu Live-Daten wechseln, ohne die Kopie zu löschen.</p></div><input type="checkbox" data-setting="frozen" ${s.frozen ? "checked" : ""} aria-label="Eingefrorene Daten verwenden"></div></div><div class="card"><h2>Veranstaltungen</h2><label>Frühere Veranstaltung öffnen</label><select id="experiment-picker" style="width:100%">${status.experiments.map((x) => `<option value="${x.id}" ${x.id === id ? "selected" : ""}>${esc(x.name)} ${x.demo ? "[DEMO]" : ""} · ${x.id}</option>`).join("")}</select><form id="new-experiment"><label for="experiment-name">Neue Veranstaltung</label><input id="experiment-name" name="name" placeholder="z. B. Lehrprobe · November 2026" required maxlength="100" style="width:100%"><label><input type="checkbox" name="demo"> Getrennte Demo-Veranstaltung</label><button class="primary" style="margin-top:12px">Veranstaltung anlegen</button></form></div><div class="card"><h2>Experiment neu starten</h2><p class="note">Löscht alle Messungen, die Fisher-Erkundung und den eingefrorenen Stand. Angemeldete Personen und Teilnahmelink bleiben erhalten. Anmeldung und Messphase werden geöffnet.</p><button class="danger" data-action="restart">↻ Experiment neu starten …</button></div><div class="card"><h2>Datenbestand vollständig löschen</h2><p class="note">Löscht alle Personen, Messungen und den eingefrorenen Stand dieser Veranstaltung dauerhaft. Andere Veranstaltungen bleiben erhalten.</p><button class="danger" data-action="reset-data">Daten löschen …</button></div></div><div>${toleranceCard()}<div class="card"><h2>Teilnahmelink</h2><img src="${endpoint("qr")}" alt="QR-Code zum Teilnahmelink" style="width:170px;display:block;margin:20px auto"><p class="note" style="word-break:break-all">${esc(location.origin + "/?e=" + id + "&view=participate")}</p><button class="small" data-action="copy">Link kopieren</button><p class="note" style="margin-top:18px">Öffentliche Projektion (nach Freigabe):<br><a href="/?e=${id}&view=presentation" target="_blank" rel="noopener">Projektionsansicht öffnen ↗</a></p></div>${e.demo ? `<div class="card"><span class="badge demo">DEMO · strikt getrennt</span><h2 style="margin-top:15px">Beispieldaten erzeugen</h2><form id="demo-form"><label for="demo-n">Anzahl Personen (2–500)</label><input id="demo-n" name="n" type="number" min="2" max="500" value="60"><label for="demo-share">Anteil Studierende (%)</label><input id="demo-share" name="share" type="number" min="0" max="100" value="60"><button class="primary" style="margin-top:20px">Demo-Datensatz erzeugen</button></form><p class="note" style="margin-top:15px">Ein normalverteilter Versuch pro Person. Bestehende Demo-Daten vorher zurücksetzen.</p></div>` : '<div class="card"><h2>Für die Lehrprobe üben</h2><p class="note">Lege eine neue Veranstaltung mit aktivierter Demo-Option an. Beispieldaten können niemals in reale Veranstaltungen geschrieben werden.</p></div>'}</div></div>`
   );
 }
 function exportPage() {
@@ -884,7 +816,7 @@ const slides = [
     "Boxplots",
     "Toleranz",
     "Vierfeldertafel",
-    "Simulation",
+    "Fisher-Labor",
     "Testentscheidung",
   ];
 function drawPresentation() {
@@ -923,15 +855,12 @@ function drawPresentation() {
       body = `<h1>Von den Messwerten zur Vierfeldertafel</h1>${basis()}${toleranceControl()}${frequencyControl()}${crossTable()}${shares()}`;
       break;
     case "simulation":
-      body = s.simulation
-        ? simulationContent()
-        : '<div class="empty">Das Simulationslabor wurde noch nicht freigegeben.</div>';
+      body = simulationContent();
       break;
     case "decision": {
-      const t = s.lockedTolerance ?? s.tolerance,
-        z = table(activeRows(), t),
-        p = fisher(z, s.side);
-      body = `<h1>Was können wir schließen?</h1>${s.simulation && s.reveal >= 9 ? `<div class="result">p = ${fmt(p, 4)}</div><h2>${p == null ? "Noch keine Testentscheidung möglich" : p <= s.alpha ? "H₀ auf dem gewählten Niveau verwerfen" : "H₀ auf dem gewählten Niveau nicht verwerfen"}</h2><p class="note">Fisher-Test · α = ${pct(s.alpha)} · ${modes[s.mode]} · Testtoleranz ± ${fmt(t, 1)} s.</p><p class="note">Ein nicht signifikantes Ergebnis beweist H₀ nicht. Nicht randomisierte Gruppenzugehörigkeit und Gelegenheitsstichprobe begrenzen kausale Aussagen und Verallgemeinerungen.</p>` : '<div class="empty">Die Testentscheidung wurde noch nicht freigegeben.</div>'}`;
+      const t = s.lockedTolerance ?? s.tolerance;
+      body = `<h1>Was können wir schließen?</h1>${basis()}<p class="subtitle">Testtoleranz ± ${fmt(t, 1)} Sekunden</p>${(s.fisherStep ?? 1) >= 7 ? fisherDecision(table(activeRows(), t), s) : '<div class="empty">Die Entscheidung folgt im Fisher-Labor in Schritt 7.</div>'}`;
+      break;
     }
   }
   app.innerHTML = `<main class="presentation ${state.admin ? "" : "read-only"}"><div class="preshead"><div class="brand" style="color:var(--navy);margin:0">${brand().replace(/^<div class="brand">|<\/div>$/g, "")}</div><div class="actions"><span class="badge ${e.demo ? "demo" : ""}">${e.demo ? "DEMO" : "LIVE"} · ${esc(e.name)}</span><button class="small danger" data-action="restart">↻ Neu starten</button><button class="small" data-action="fullscreen">⛶ Vollbild</button><button class="small" data-view="overview">Labor ↗</button></div></div>${body}<div class="divider"></div><div class="prescontrols"><button class="small" data-action="pres-prev">← Zurück</button><span>${presIndex + 1} / ${slides.length} · ${slideNames[presIndex]} · Pfeiltasten zum Wechseln</span><button class="small" data-action="pres-next">Weiter →</button></div><div class="present-list" style="margin-top:18px">${slideNames.map((n, i) => `<button class="${presIndex === i ? "primary" : ""}" data-pres="${i}">${n}</button>`).join("")}</div></main>`;
@@ -1046,7 +975,7 @@ async function showInvite() {
   d.addEventListener("close", () => d.remove());
 }
 async function action(e) {
-  const el = e.target.closest("button");
+  const el = e.target.closest("button, [data-fisher-x]");
   if (!el) return;
   if (el.dataset.view) {
     if (el.dataset.slide) presIndex = slides.indexOf(el.dataset.slide);
@@ -1081,11 +1010,16 @@ async function action(e) {
     await settings({ presentation: slides[presIndex] });
     return;
   }
-  if (el.dataset.sim) {
-    el.disabled = true;
-    await api(endpoint("simulate"), { n: Number(el.dataset.sim) });
-    await load(false);
-    draw();
+  if (el.hasAttribute("data-fisher-step")) {
+    const step = Number(el.dataset.fisherStep);
+    await settings({
+      fisherStep: step,
+      ...(step === 6 ? { fisherEvent: "fisher" } : {}),
+    });
+    return;
+  }
+  if (el.hasAttribute("data-fisher-x")) {
+    if (state.admin) await settings({ fisherX: Number(el.dataset.fisherX) });
     return;
   }
   if (el.dataset.export) return exportData(el.dataset.export, el.dataset.kind);
@@ -1124,10 +1058,8 @@ async function action(e) {
       await settings({ freeze: true });
       toast("Auswertungsstand gespeichert.");
       break;
-    case "reset-sim":
-      await api(endpoint("simulate"), { n: 0 });
-      await load(false);
-      draw();
+    case "fisher-tail":
+      await settings({ fisherEvent: "fisher" });
       break;
     case "logout":
       await api("/api/logout", {});
@@ -1154,7 +1086,7 @@ async function action(e) {
       break;
     case "restart": {
       const d = document.createElement("dialog");
-      d.innerHTML = `<h2>Experiment neu starten?</h2><p class="note">Alle Messungen, die Bestenliste, Simulationen und der eingefrorene Auswertungsstand dieser Veranstaltung werden unwiderruflich gelöscht. Angemeldete Personen, Einstellungen und Teilnahmelink bleiben erhalten. Auch offline zwischengespeicherte alte Messungen können danach nicht erneut eingereicht werden.</p><p class="note">Gib zur Bestätigung <b>NEUSTART ${id}</b> ein.</p><form id="restart-form"><input name="confirm" required autocomplete="off" aria-label="Neustart bestätigen"><div class="actions" style="margin-top:20px"><button class="danger">Messungen löschen und neu starten</button><button type="button" data-action="close-dialog">Abbrechen</button></div></form>`;
+      d.innerHTML = `<h2>Experiment neu starten?</h2><p class="note">Alle Messungen, die Bestenliste, die Fisher-Erkundung und der eingefrorene Auswertungsstand dieser Veranstaltung werden unwiderruflich gelöscht. Angemeldete Personen, Einstellungen und Teilnahmelink bleiben erhalten. Auch offline zwischengespeicherte alte Messungen können danach nicht erneut eingereicht werden.</p><p class="note">Gib zur Bestätigung <b>NEUSTART ${id}</b> ein.</p><form id="restart-form"><input name="confirm" required autocomplete="off" aria-label="Neustart bestätigen"><div class="actions" style="margin-top:20px"><button class="danger">Messungen löschen und neu starten</button><button type="button" data-action="close-dialog">Abbrechen</button></div></form>`;
       document.body.append(d);
       d.showModal();
       d.addEventListener("close", () => d.remove());
@@ -1205,6 +1137,10 @@ document.addEventListener("change", async (e) => {
   }
 });
 document.addEventListener("input", (e) => {
+  if (e.target.dataset.setting === "fisherX")
+    document.querySelectorAll('[data-setting="fisherX"]').forEach((el) => {
+      el.value = e.target.value;
+    });
   if (e.target.hasAttribute("data-tolerance"))
     document.querySelectorAll("[data-tolerance]").forEach((el) => {
       el.value = e.target.value;
@@ -1277,6 +1213,14 @@ document.addEventListener("submit", async (e) => {
   }
 });
 window.addEventListener("keydown", (e) => {
+  if (
+    e.target?.hasAttribute?.("data-fisher-x") &&
+    ["Enter", " "].includes(e.key)
+  ) {
+    e.preventDefault();
+    action({ target: e.target }).catch((err) => toast(err.message));
+    return;
+  }
   if (
     view !== "presentation" ||
     ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)

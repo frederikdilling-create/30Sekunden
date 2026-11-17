@@ -20,6 +20,7 @@ import {
   table,
   difference,
   permute,
+  fisherParameters,
 } from "./public/stats.js";
 const cliPort = process.argv.includes("--port")
   ? process.argv[process.argv.indexOf("--port") + 1]
@@ -46,6 +47,13 @@ const defaults = {
   alpha: 0.05,
   side: "two",
   reveal: 1,
+  fisherStep: 1,
+  fisherGroup: "student",
+  fisherX: null,
+  fisherEvent: "single",
+  fisherLower: null,
+  fisherUpper: null,
+  fisherContext: null,
   presentation: "welcome",
   publicPresentation: false,
 };
@@ -157,7 +165,36 @@ function json(res, value, status = 200) {
   });
   res.end(JSON.stringify(value));
 }
+function fisherSettings(e, settings = e.settings) {
+  const r = settings.frozen && e.snapshot ? JSON.parse(e.snapshot) : rows(e.id);
+  const tolerance = settings.lockedTolerance ?? settings.tolerance;
+  const counts = table(select(r, settings.mode), tolerance);
+  const model = fisherParameters(counts, settings.fisherGroup);
+  const context = JSON.stringify([
+    counts,
+    settings.mode,
+    tolerance,
+    settings.round,
+    settings.fisherGroup,
+  ]);
+  const changed = settings.fisherContext !== context;
+  const bounded = (x, fallback) =>
+    changed || !Number.isInteger(x)
+      ? fallback
+      : Math.max(model.min, Math.min(model.max, x));
+  const lower = bounded(settings.fisherLower, model.min);
+  const upper = Math.max(lower, bounded(settings.fisherUpper, model.max));
+  return {
+    ...settings,
+    fisherContext: context,
+    fisherX: bounded(settings.fisherX, model.observed),
+    fisherLower: lower,
+    fisherUpper: upper,
+    fisherEvent: changed ? "single" : settings.fisherEvent,
+  };
+}
 function state(req, e) {
+  e.settings = fisherSettings(e);
   const presentation =
     new URL(req.url, "http://local").searchParams.get("presentation") ===
       "true" && e.settings.publicPresentation;
@@ -435,8 +472,8 @@ const server = http.createServer(async (req, res) => {
       }
       requireAdmin(req);
       if (action === "settings" && req.method === "POST") {
-        const b = await body(req),
-          s = { ...e.settings };
+        const b = await body(req);
+        let s = { ...e.settings };
         for (const k of [
           "registration",
           "running",
@@ -469,6 +506,60 @@ const server = http.createServer(async (req, res) => {
         if (["two", "left", "right"].includes(b.side)) s.side = b.side;
         if (typeof b.presentation === "string" && b.presentation.length < 30)
           s.presentation = b.presentation;
+        if ("fisherGroup" in b) {
+          if (!["student", "staff"].includes(b.fisherGroup))
+            throw Error("Unbekannte Gruppe für den Fisher-Test.");
+          s.fisherGroup = b.fisherGroup;
+        }
+        s = fisherSettings(e, s);
+        const fisherRows =
+          s.frozen && e.snapshot ? JSON.parse(e.snapshot) : rows(id);
+        const fisherModel = fisherParameters(
+          table(select(fisherRows, s.mode), s.lockedTolerance ?? s.tolerance),
+          s.fisherGroup,
+        );
+        if ("fisherStep" in b) {
+          if (
+            !Number.isInteger(b.fisherStep) ||
+            b.fisherStep < 1 ||
+            b.fisherStep > 7
+          )
+            throw Error("Didaktische Stufe muss zwischen 1 und 7 liegen.");
+          s.fisherStep = b.fisherStep;
+        }
+        if ("fisherEvent" in b) {
+          if (
+            !["single", "left", "right", "interval", "fisher"].includes(
+              b.fisherEvent,
+            )
+          )
+            throw Error("Unbekanntes Ereignis.");
+          s.fisherEvent = b.fisherEvent;
+        }
+        for (const key of ["fisherX", "fisherLower", "fisherUpper"])
+          if (key in b) {
+            const value =
+              b[key] === null
+                ? key === "fisherX"
+                  ? fisherModel.observed
+                  : key === "fisherLower"
+                    ? fisherModel.min
+                    : fisherModel.max
+                : b[key];
+            if (
+              !Number.isInteger(value) ||
+              value < fisherModel.min ||
+              value > fisherModel.max
+            )
+              throw Error(
+                `Bei diesen Randsummen sind nur Werte von ${fisherModel.min} bis ${fisherModel.max} möglich.`,
+              );
+            s[key] = value;
+          }
+        if (s.fisherLower > s.fisherUpper)
+          throw Error(
+            "Die untere Intervallgrenze darf nicht größer als die obere sein.",
+          );
         if (b.frozen && !e.snapshot && !b.freeze)
           throw Error("Bitte zuerst einen Auswertungsstand sichern.");
         if (b.freeze) {
@@ -537,6 +628,12 @@ const server = http.createServer(async (req, res) => {
           registration: true,
           running: true,
           reveal: 1,
+          fisherStep: 1,
+          fisherX: null,
+          fisherLower: null,
+          fisherUpper: null,
+          fisherEvent: "single",
+          fisherContext: null,
           presentation: "welcome",
         };
         // Keep identities and links so connected phones can start over immediately.
@@ -725,6 +822,7 @@ const server = http.createServer(async (req, res) => {
         "/app.js": "app.js",
         "/style.css": "style.css",
         "/stats.js": "stats.js",
+        "/fisher-lab.js": "fisher-lab.js",
       },
       file = files[path];
     if (!file) throw Object.assign(Error("Nicht gefunden."), { status: 404 });

@@ -34,6 +34,8 @@ Ein Demo-Datensatz ist eine Übung, keine wissenschaftliche Referenzpopulation: 
 
 ## Architektur
 
+Das Original-Logo wird unverändert aus `public/challenge-logo.png` geladen. Sobald die Datei im Repository vorhanden und bereitgestellt ist, ersetzt sie automatisch die bisherige Markenanzeige an denselben Stellen (Administration, Teilnehmeransicht und Präsentation). Ohne Bilddatei bleibt die bisherige Anzeige erhalten. Die Grafik wird vollständig und proportional dargestellt, weder zugeschnitten noch neu erzeugt. Nach dem Hochladen die aktuelle Version bereitstellen und die Seite neu laden.
+
 - `server.mjs`: HTTP-API, SQLite-Schema, gesalzene Passworthashes, serverseitige Autorisierung, Cookie-Sitzungen (12 h), Live-Ereignisse, QR und Exporte.
 - `public/app.js`: Benutzeroberfläche, lokale Timer, Offline-Warteschlange und SVG-Diagramme.
 - `public/stats.js`: reine, von UI und Datenhaltung getrennte Statistikfunktionen inklusive exakter hypergeometrischer Verteilung, Ereignissummen und Fisher-Test. Frontend und Tests nutzen dieselbe Berechnungslogik.

@@ -7,7 +7,7 @@ import {
   timingSafeEqual,
   createHash,
 } from "node:crypto";
-import { readFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
@@ -274,6 +274,7 @@ const server = http.createServer(async (req, res) => {
     if (path === "/api/status")
       return json(res, {
         admin: !!auth(req),
+        logo: existsSync(join(root, "public", "challenge-logo.png")),
         setup: !db
           .prepare("SELECT value FROM config WHERE key='password'")
           .get(),
@@ -823,15 +824,19 @@ const server = http.createServer(async (req, res) => {
         "/style.css": "style.css",
         "/stats.js": "stats.js",
         "/fisher-lab.js": "fisher-lab.js",
+        "/challenge-logo.png": "challenge-logo.png",
       },
       file = files[path];
-    if (!file) throw Object.assign(Error("Nicht gefunden."), { status: 404 });
+    if (!file || !existsSync(join(root, "public", file)))
+      throw Object.assign(Error("Nicht gefunden."), { status: 404 });
     res.writeHead(200, {
       "Content-Type": file.endsWith(".html")
         ? "text/html; charset=utf-8"
         : file.endsWith(".css")
           ? "text/css"
-          : "text/javascript",
+          : file.endsWith(".png")
+            ? "image/png"
+            : "text/javascript",
     });
     res.end(readFileSync(join(root, "public", file)));
   } catch (err) {

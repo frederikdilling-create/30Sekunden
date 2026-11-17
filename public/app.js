@@ -171,6 +171,8 @@ async function flush() {
   await load();
 }
 function brand() {
+  if (status.logo)
+    return '<div class="brand"><img class="brand-logo" src="/challenge-logo.png" alt="Die 30 Sekunden Challenge" width="160" height="52" decoding="async"></div>';
   return `<div class="brand"><div class="brandmark">30</div><div class="brandtext">THE 30 SECONDS<br>CHALLENGE<span>Das interaktive Statistiklabor</span></div></div>`;
 }
 const navItems = [

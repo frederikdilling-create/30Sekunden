@@ -95,7 +95,7 @@ test("Mehrbenutzersystem: 100 parallele Personen, Idempotenz, Autorisierung, SSE
     );
     const anon = await req(ep("state"));
     assert.equal(anon.data.rows.length, 0);
-    assert.equal(anon.data.leaderboard.length, 0);
+    assert.equal(anon.data.leaderboard.length, 100);
     const personal = await req(ep("state"), undefined, people[0].data.token);
     assert.equal(personal.data.own.length, 1);
     assert.equal(personal.data.participant.group, "student");

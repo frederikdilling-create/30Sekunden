@@ -35,11 +35,13 @@ const defaults = {
   registration: true,
   running: true,
   maxAttempts: 0,
-  leaderboard: false,
+  leaderboard: true,
   simulation: false,
   tolerance: 5,
   lockedTolerance: null,
   mode: "first",
+  frequency: "absolute",
+  round: "initial",
   frozen: false,
   alpha: 0.05,
   side: "two",
@@ -89,7 +91,15 @@ function experiment(id) {
     throw Object.assign(Error("Veranstaltung nicht gefunden."), {
       status: 404,
     });
-  return { ...e, settings: JSON.parse(e.settings) };
+  const settings = {
+    ...defaults,
+    ...JSON.parse(e.settings),
+    leaderboard: true,
+  };
+  // Keep saved events compatible when opening an older presentation state.
+  if (settings.presentation === "experiment") settings.presentation = "welcome";
+  if (settings.presentation === "shares") settings.presentation = "contingency";
+  return { ...e, settings };
 }
 function rows(id) {
   return db
@@ -199,13 +209,10 @@ function state(req, e) {
     publicRows: admin ? publicRows : [],
     own: p ? all.filter((x) => x.participant === p.id) : [],
     participant: p ? { id: p.id, nickname: p.nickname, group: p.grp } : null,
-    leaderboard:
-      admin || e.settings.leaderboard
-        ? ranking(all).map(({ participant, ...x }) => ({
-            ...x,
-            self: participant === p?.id,
-          }))
-        : [],
+    leaderboard: ranking(all).map(({ participant, ...x }) => ({
+      ...x,
+      self: participant === p?.id,
+    })),
   };
 }
 const server = http.createServer(async (req, res) => {
@@ -368,6 +375,16 @@ const server = http.createServer(async (req, res) => {
       if (action === "measure" && req.method === "POST") {
         const p = requirePerson(req, id),
           b = await body(req);
+        if ((b.round ?? "initial") !== e.settings.round)
+          throw Object.assign(
+            Error(
+              "Das Experiment wurde neu gestartet. Diese Messung gehört zur vorherigen Runde.",
+            ),
+            {
+              status: 409,
+              code: "stale_round",
+            },
+          );
         if (typeof b.id !== "string" || !/^[\w-]{16,80}$/.test(b.id))
           throw Error("Ungültige Messungs-ID.");
         const existing = db
@@ -423,7 +440,6 @@ const server = http.createServer(async (req, res) => {
         for (const k of [
           "registration",
           "running",
-          "leaderboard",
           "simulation",
           "frozen",
           "publicPresentation",
@@ -444,7 +460,12 @@ const server = http.createServer(async (req, res) => {
           }
         if (b.lockTolerance) s.lockedTolerance = s.tolerance;
         if (b.unlockTolerance) s.lockedTolerance = null;
-        if (["all", "first", "last", "best"].includes(b.mode)) s.mode = b.mode;
+        if (["all", "first", "last", "best", "worst"].includes(b.mode))
+          s.mode = b.mode;
+        if (
+          ["absolute", "total", "column", "row", "both"].includes(b.frequency)
+        )
+          s.frequency = b.frequency;
         if (["two", "left", "right"].includes(b.side)) s.side = b.side;
         if (typeof b.presentation === "string" && b.presentation.length < 30)
           s.presentation = b.presentation;
@@ -505,6 +526,36 @@ const server = http.createServer(async (req, res) => {
         emit(id);
         return json(res, { ok: true });
       }
+      if (action === "restart" && req.method === "POST") {
+        const b = await body(req);
+        if (b.confirm !== `NEUSTART ${id}`)
+          throw Error("Bestätigung stimmt nicht überein.");
+        const settings = {
+          ...e.settings,
+          round: randomUUID(),
+          frozen: false,
+          registration: true,
+          running: true,
+          reveal: 1,
+          presentation: "welcome",
+        };
+        // Keep identities and links so connected phones can start over immediately.
+        // The round changes atomically with deletion to reject queued old results.
+        db.exec("BEGIN");
+        try {
+          db.prepare("DELETE FROM simulations WHERE experiment=?").run(id);
+          db.prepare("DELETE FROM measurements WHERE experiment=?").run(id);
+          db.prepare(
+            "UPDATE experiments SET snapshot=NULL,settings=? WHERE id=?",
+          ).run(JSON.stringify(settings), id);
+          db.exec("COMMIT");
+        } catch (err) {
+          db.exec("ROLLBACK");
+          throw err;
+        }
+        emit(id);
+        return json(res, { ok: true });
+      }
       if (action === "reset" && req.method === "POST") {
         const b = await body(req);
         if (b.confirm !== `LÖSCHEN ${id}`)
@@ -516,7 +567,7 @@ const server = http.createServer(async (req, res) => {
           db.prepare("DELETE FROM participants WHERE experiment=?").run(id);
           db.prepare(
             "UPDATE experiments SET snapshot=NULL,settings=? WHERE id=?",
-          ).run(JSON.stringify(defaults), id);
+          ).run(JSON.stringify({ ...defaults, round: randomUUID() }), id);
           db.exec("COMMIT");
         } catch (err) {
           db.exec("ROLLBACK");
@@ -686,7 +737,11 @@ const server = http.createServer(async (req, res) => {
     });
     res.end(readFileSync(join(root, "public", file)));
   } catch (err) {
-    json(res, { error: err.message }, err.status || 400);
+    json(
+      res,
+      { error: err.message, ...(err.code ? { code: err.code } : {}) },
+      err.status || 400,
+    );
   }
 });
 server.listen(Number(process.env.PORT || cliPort) || 3000, "0.0.0.0", () =>

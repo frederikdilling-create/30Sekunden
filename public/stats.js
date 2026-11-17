@@ -9,7 +9,9 @@ export function select(rows, mode = "first") {
     if (
       !p ||
       mode === "last" ||
-      (mode === "best" && Math.abs(x.seconds - 30) < Math.abs(p.seconds - 30))
+      (mode === "best" &&
+        Math.abs(x.seconds - 30) < Math.abs(p.seconds - 30)) ||
+      (mode === "worst" && Math.abs(x.seconds - 30) > Math.abs(p.seconds - 30))
     )
       m.set(x.participant, x);
   }
@@ -81,6 +83,26 @@ export function table(rows, t) {
     c: a.filter((x) => !good(x.seconds, t)).length,
     d: b.filter((x) => !good(x.seconds, t)).length,
   };
+}
+// Marginal totals are included. Empty denominators are undefined, not zero.
+export function frequencies(counts, mode = "total") {
+  const { a, b, c, d } = counts;
+  const matrix = [
+    [a, b, a + b],
+    [c, d, c + d],
+    [a + c, b + d, a + b + c + d],
+  ];
+  return matrix.map((row, i) =>
+    row.map((value, j) => {
+      const denominator =
+        mode === "column"
+          ? matrix[2][j]
+          : mode === "row"
+            ? matrix[i][2]
+            : matrix[2][2];
+      return denominator ? value / denominator : null;
+    }),
+  );
 }
 export const difference = ({ a, b, c, d }) =>
   a + c && b + d ? a / (a + c) - b / (b + d) : null;

@@ -121,3 +121,44 @@ test("Permutationen erhalten beide Ränder, approximieren die Hypergeometrie", (
   assert.ok(Math.abs(sum / 30000 - 5) < 0.03);
   assert.ok(Math.abs(tail / 30000 - fisher(z)) < 0.008);
 });
+
+test("Einzelperson: identische Kennzahlen nur bei einem ausgewählten Versuch", () => {
+  const rows = [row("a", 22, 1), row("a", 29, 2), row("a", 37, 3)];
+  const first = describe(select(rows, "first"));
+  assert.deepEqual(
+    [first.n, first.mean, first.median, first.min, first.max],
+    [1, 22, 22, 22, 22],
+  );
+  const all = describe(select(rows, "all"));
+  assert.deepEqual(
+    [all.n, all.mean, all.median, all.min, all.max],
+    [3, 88 / 3, 29, 22, 37],
+  );
+});
+
+test("Beste und schlechteste Messung anhand absoluter Abweichung, nicht nach kleinster/größter Zeit", () => {
+  const rows = [
+    row("a", 20, 1),
+    row("a", 31, 2),
+    row("a", 29, 3),
+    row("a", 60, 4, "student", 0),
+    row("b", 30, 1),
+  ];
+  assert.equal(
+    select(rows, "worst").find((x) => x.participant === "a").seconds,
+    20,
+  );
+  assert.equal(
+    select(rows, "best").find((x) => x.participant === "a").seconds,
+    31,
+  );
+  assert.equal(
+    select(rows, "last").find((x) => x.participant === "a").seconds,
+    29,
+  );
+  assert.equal(select(rows, "worst").length, 2);
+  const tie = [row("a", 32, 3), row("a", 28, 1)];
+  assert.equal(select(tie, "worst")[0].attempt, 1);
+  assert.equal(select(tie, "best")[0].attempt, 1);
+  assert.equal(select([], "worst").length, 0);
+});

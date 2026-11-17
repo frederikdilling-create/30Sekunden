@@ -2,6 +2,7 @@ import {
   select,
   describe,
   table,
+  frequencies,
   difference,
   extreme,
   fisher,
@@ -18,7 +19,8 @@ const $ = (s) => document.querySelector(s),
           minimumFractionDigits: d,
           maximumFractionDigits: d,
         }),
-  pct = (v) => (v == null || !Number.isFinite(v) ? "–" : fmt(v * 100, 1) + " %"),
+  pct = (v) =>
+    v == null || !Number.isFinite(v) ? "–" : fmt(v * 100, 1) + " %",
   esc = (s) =>
     String(s ?? "").replace(
       /[&<>"']/g,
@@ -33,10 +35,11 @@ const $ = (s) => document.querySelector(s),
     );
 const groups = { student: "Studierende", staff: "Mitarbeitende" },
   modes = {
-    first: "Erster Versuch pro Person",
-    all: "Alle Versuche",
-    last: "Letzter Versuch pro Person",
-    best: "Bester Versuch pro Person",
+    all: "Alle Messungen",
+    best: "Beste Messung pro Person",
+    worst: "Schlechteste Messung pro Person",
+    first: "Erste gültige Messung pro Person",
+    last: "Neueste gültige Messung pro Person",
   };
 let id = params.get("e"),
   view = params.get("view") || "overview",
@@ -51,7 +54,6 @@ let id = params.get("e"),
   rankFilter = "all",
   chartType = "dot",
   metricType = "seconds",
-  freqMode = "absolute",
   measureGroup = "all",
   measureAttempt = "all",
   sort = "created",
@@ -83,7 +85,11 @@ async function api(path, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await r.json();
-  if (!r.ok) throw Error(data.error || "Verbindung fehlgeschlagen.");
+  if (!r.ok)
+    throw Object.assign(Error(data.error || "Verbindung fehlgeschlagen."), {
+      code: data.code,
+      status: r.status,
+    });
   return data;
 }
 const endpoint = (action) => `/api/e/${id}/${action}`;
@@ -94,9 +100,25 @@ async function settings(b) {
 }
 async function load(render = true) {
   if (!id) return;
+  const previous = state?.experiment;
   state = await api(
     endpoint("state") + (view === "presentation" ? "?presentation=true" : ""),
   );
+  if (
+    previous?.id === id &&
+    previous.settings.round !== state.experiment.settings.round
+  ) {
+    timerStart = null;
+    interrupted = true;
+    result = null;
+    outbox = outbox.filter((x) => x.experiment !== id);
+    localStorage.setItem("challenge-outbox", JSON.stringify(outbox));
+    toast(
+      "Das Experiment wurde neu gestartet. Alle bisherigen Messungen sind gelöscht; du kannst wieder beginnen.",
+    );
+    draw();
+    return;
+  }
   if (render && !timerStart) {
     const focused = document.activeElement;
     if (focused?.closest("form")) return;
@@ -138,6 +160,14 @@ async function flush() {
       outbox = outbox.filter((y) => y.id !== x.id);
       localStorage.setItem("challenge-outbox", JSON.stringify(outbox));
     } catch (err) {
+      if (err.code === "stale_round") {
+        outbox = outbox.filter((y) => y.id !== x.id);
+        localStorage.setItem("challenge-outbox", JSON.stringify(outbox));
+        toast(
+          "Eine Messung aus der vorherigen Runde wurde nach dem Neustart verworfen.",
+        );
+        continue;
+      }
       toast("Messung noch nicht übertragen: " + err.message);
       break;
     }
@@ -183,16 +213,50 @@ function head(title, sub, actions = "") {
 }
 function basis() {
   const s = state.experiment.settings;
-  return `<div class="banner"><span>Datengrundlage <b> · ${modes[s.mode]}</b>${s.frozen ? " · Eingefrorener Auswertungsstand" : ""}</span><div class="control"><select data-setting="mode" aria-label="Datengrundlage">${Object.entries(
-    modes,
-  )
-    .map(
-      ([k, v]) =>
-        `<option value="${k}" ${s.mode === k ? "selected" : ""}>${v}</option>`,
-    )
-    .join(
-      "",
-    )}</select></div></div>${s.mode !== "first" ? '<div class="banner warn">Methodischer Hinweis: Alle Versuche enthalten abhängige Wiederholungen; letzte und beste Versuche können Training und Auswahl abbilden. Für den primären Test: erster gültiger Versuch pro Person.</div>' : ""}`;
+  return `<div class="banner analysis-basis"><div><span>Datengrundlage <b> · ${modes[s.mode]}</b>${s.frozen ? " · Eingefrorener Auswertungsstand" : ""}</span>${["best", "worst"].includes(s.mode) ? "<small>Auswahl anhand der absoluten Abweichung von 30 Sekunden; bei Gleichstand zählt die frühere Messung.</small>" : ""}</div>${
+    state.admin
+      ? `<select data-setting="mode" aria-label="Datengrundlage">${Object.entries(
+          modes,
+        )
+          .map(
+            ([k, v]) =>
+              `<option value="${k}" ${s.mode === k ? "selected" : ""}>${v}</option>`,
+          )
+          .join("")}</select>`
+      : ""
+  }</div>${s.mode !== "first" ? '<div class="banner warn">Explorative Auswertung: Wiederholungen derselben Person sind nicht unabhängig. Die Auswahl bester, schlechtester oder neuester Messungen kann das Ergebnis beeinflussen. Für den primären Test: erste gültige Messung pro Person.</div>' : ""}`;
+}
+function toleranceInputs() {
+  const t = state.experiment.settings.tolerance;
+  return state.admin
+    ? `<div class="control tolerance-inputs"><input aria-label="Toleranzbereich" type="range" min="0" max="30" step="0.1" value="${t}" data-tolerance><input aria-label="Toleranz in Sekunden" type="number" min="0" max="30" step="0.1" value="${t}" data-tolerance></div>`
+    : "";
+}
+function toleranceControl() {
+  const t = state.experiment.settings.tolerance;
+  return `<div class="banner tolerance-toolbar"><div><b>Toleranz: ± ${fmt(t, 1)} Sekunden</b><small>Gut: ${fmt(30 - t, 1)} bis einschließlich ${fmt(30 + t, 1)} Sekunden</small></div>${toleranceInputs()}</div>`;
+}
+const frequencyModes = {
+  absolute: "Absolute Häufigkeiten",
+  total: "Relative Häufigkeiten · Gesamtstichprobe",
+  column: "Relative Häufigkeiten · je Gruppe (Spalte)",
+  row: "Relative Häufigkeiten · je Qualität (Zeile)",
+  both: "Absolut und relativ · Gesamtstichprobe",
+};
+function frequencyControl() {
+  const mode = state.experiment.settings.frequency;
+  return `<div class="banner frequency-toolbar"><span>Darstellung <b> · ${frequencyModes[mode]}</b></span>${
+    state.admin
+      ? `<select data-setting="frequency" aria-label="Häufigkeitsdarstellung">${Object.entries(
+          frequencyModes,
+        )
+          .map(
+            ([k, v]) =>
+              `<option value="${k}" ${mode === k ? "selected" : ""}>${v}</option>`,
+          )
+          .join("")}</select>`
+      : ""
+  }</div>`;
 }
 function chartTools() {
   return `<div class="chart-tools"><button data-action="svg">SVG ↗</button><button data-action="png">PNG ↗</button></div>`;
@@ -343,10 +407,10 @@ function chartCard() {
 function toleranceCard() {
   const s = state.experiment.settings,
     t = s.tolerance;
-  return `<div class="card"><div class="cardhead"><div><h2>Was ist eine gute Schätzung?</h2><p>Toleranzbereich um die Zielzeit festlegen</p></div><span class="badge">${s.lockedTolerance == null ? "Exploration" : "Vorab festgelegt"}</span></div><div class="tolerance-number">± ${fmt(t, 1)} <small>Sekunden</small></div><div class="control"><input aria-label="Toleranzbereich" type="range" min="0" max="15" step="0.1" value="${t}" data-tolerance><input aria-label="Toleranz in Sekunden" type="number" min="0" max="30" step="0.1" value="${t}" data-tolerance></div><div class="range-labels"><span>0 s</span><span>± 15 s</span></div><p class="note">Gute Schätzung: <b>${fmt(30 - t, 1)} bis einschließlich ${fmt(30 + t, 1)} Sekunden.</b><br>Absolute Abweichung ≤ ${fmt(t, 1)} Sekunden.</p><div class="divider"></div>${s.lockedTolerance == null ? '<button class="small" data-action="lock">♧ Für konfirmatorischen Test fixieren</button>' : `<p class="note">Fixierter Toleranzwert: <b>± ${fmt(s.lockedTolerance, 1)} s</b>${t !== s.lockedTolerance ? "<br><b>Explorative Änderung aktiv.</b> Der primäre Test verwendet weiterhin den fixierten Wert." : ""}</p>`}</div>`;
+  return `<div class="card"><div class="cardhead"><div><h2>Was ist eine gute Schätzung?</h2><p>Toleranzbereich um die Zielzeit festlegen</p></div><span class="badge">${s.lockedTolerance == null ? "Exploration" : "Vorab festgelegt"}</span></div><div class="tolerance-number">± ${fmt(t, 1)} <small>Sekunden</small></div>${toleranceInputs()}<div class="range-labels"><span>0 s</span><span>± 30 s</span></div><p class="note">Gute Schätzung: <b>${fmt(30 - t, 1)} bis einschließlich ${fmt(30 + t, 1)} Sekunden.</b><br>Absolute Abweichung ≤ ${fmt(t, 1)} Sekunden.</p><div class="divider"></div>${s.lockedTolerance == null ? '<button class="small" data-action="lock">♧ Für konfirmatorischen Test fixieren</button>' : `<p class="note">Fixierter Toleranzwert: <b>± ${fmt(s.lockedTolerance, 1)} s</b>${t !== s.lockedTolerance ? "<br><b>Explorative Änderung aktiv.</b> Der primäre Test verwendet weiterhin den fixierten Wert." : ""}</p>`}</div>`;
 }
 function crossTable(
-  mode = freqMode,
+  mode = state.experiment.settings.frequency,
   t = state.experiment.settings.tolerance,
   rows = activeRows(),
 ) {
@@ -356,14 +420,9 @@ function crossTable(
       [z.c, z.d, z.c + z.d],
       [z.a + z.c, z.b + z.d, z.a + z.b + z.c + z.d],
     ],
-    n = matrix[2][2],
+    relative = frequencies(z, mode),
     render = (v, r, c) => {
-      const rel =
-        mode === "column"
-          ? v / (matrix[2][c] || NaN)
-          : mode === "row"
-            ? v / (matrix[r][2] || NaN)
-            : v / (n || NaN);
+      const rel = relative[r][c];
       return mode === "absolute"
         ? `<strong>${v}</strong>`
         : mode === "both"
@@ -417,7 +476,7 @@ function overview() {
     head(
       "Das Experiment im Überblick",
       "Wer hat das bessere Zeitgefühl – Studierende oder Mitarbeitende?",
-      `<button data-action="invite">▦ Teilnehmen lassen</button><button class="primary" data-view="presentation">▷ Präsentationsmodus</button>`,
+      `<button data-action="invite">▦ Teilnehmen lassen</button><button class="danger" data-action="restart">↻ Experiment neu starten</button><button class="primary" data-view="presentation">▷ Präsentationsmodus</button>`,
     ) +
     metrics() +
     basis() +
@@ -447,7 +506,8 @@ function statsTable() {
     ds = ["student", "staff", "all"].map((g) =>
       describe(r.filter((x) => g === "all" || x.group === g)),
     );
-  return `<div class="tablewrap"><table><thead><tr><th>Kennzahl</th><th>Studierende</th><th>Mitarbeitende</th><th>Gesamt</th></tr></thead><tbody>${Object.entries(
+  const summary = `<div class="analysis-summary">${ds.map((d, i) => `<span><b>${["Studierende", "Mitarbeitende", "Gesamt"][i]}</b>: ${d.persons} ${d.persons === 1 ? "Person" : "Personen"} · ${d.n} ${d.n === 1 ? "Messung" : "Messungen"}</span>`).join("")}</div>${ds.some((d) => d.n === 1) ? '<p class="note single-value-note">Bei nur einer einbezogenen Messung sind Mittelwert, Median, Minimum und Maximum identisch. Wähle „Alle Messungen“, um auch Wiederholungen einzubeziehen.</p>' : ""}`;
+  return `${summary}<div class="tablewrap"><table><thead><tr><th>Kennzahl</th><th>Studierende</th><th>Mitarbeitende</th><th>Gesamt</th></tr></thead><tbody>${Object.entries(
     statNames,
   )
     .map(
@@ -534,20 +594,7 @@ function contingency() {
       `<button data-view="presentation" data-slide="contingency">▷ Großansicht</button>`,
     ) +
     basis() +
-    `<div class="grid"><div><div class="card"><div class="cardhead"><div><h2>Gute und schlechte Schätzungen</h2><p>Eine gute Schätzung liegt innerhalb des geschlossenen Toleranzintervalls.</p></div></div><div class="filters"><select id="freq-mode" aria-label="Häufigkeitsmodus">${[
-      ["absolute", "Absolute Häufigkeiten"],
-      ["total", "Relativ zur Gesamtstichprobe"],
-      ["column", "Spaltenrelative Häufigkeiten"],
-      ["row", "Zeilenrelative Häufigkeiten"],
-      ["both", "Absolut und relativ (gesamt)"],
-    ]
-      .map(
-        ([k, v]) =>
-          `<option value="${k}" ${freqMode === k ? "selected" : ""}>${v}</option>`,
-      )
-      .join(
-        "",
-      )}</select></div>${crossTable()}${shares()}</div>${categoryCharts()}</div><div>${toleranceCard()}<div class="card"><h2>Der nächste Schritt</h2><p class="note">Ist die beobachtete Differenz mit zufälliger Variation unter gleicher Erfolgswahrscheinlichkeit vereinbar?</p><button class="primary" data-view="simulation">Simulationslabor öffnen →</button></div></div></div>`
+    `<div class="grid"><div><div class="card"><div class="cardhead"><div><h2>Gute und schlechte Schätzungen</h2><p>Eine gute Schätzung liegt innerhalb des geschlossenen Toleranzintervalls.</p></div></div>${frequencyControl()}${crossTable()}${shares()}</div>${categoryCharts()}</div><div>${toleranceCard()}<div class="card"><h2>Der nächste Schritt</h2><p class="note">Ist die beobachtete Differenz mit zufälliger Variation unter gleicher Erfolgswahrscheinlichkeit vereinbar?</p><button class="primary" data-view="simulation">Simulationslabor öffnen →</button></div></div></div>`
   );
 }
 function simHistogram(z, obs, side, reveal) {
@@ -644,7 +691,7 @@ function rankingContent() {
     )
     .join(
       "",
-    )}</div><div class="tablewrap"><table><thead><tr><th>Platz</th><th>Nickname</th><th>Gruppe</th><th>Beste Schätzung</th><th>Absolute Abweichung</th></tr></thead><tbody>${r.map((x, i) => `<tr class="${x.self ? "self" : ""}"><td><span class="ranknum ${i < 3 ? "top" + (i + 1) : ""}">${i + 1}</span></td><td>${esc(x.nickname)} ${x.self ? '<span class="badge">Du</span>' : ""}</td><td><span class="group ${x.group === "staff" ? "staff" : ""}">${groups[x.group]}</span></td><td>${fmt(x.seconds)} s</td><td><b>${fmt(Math.abs(x.seconds - 30))} s</b></td></tr>`).join("")}</tbody></table>${!r.length ? '<div class="empty">Noch keine freigegebenen Ergebnisse.</div>' : ""}</div><p class="note" style="margin-top:20px">Pro Person zählt nur der beste gültige Versuch. Bei gleicher Abweichung wird der früher eingegangene Versuch zuerst angezeigt.</p>`;
+    )}</div><div class="tablewrap"><table><thead><tr><th>Platz</th><th>Nickname</th><th>Gruppe</th><th>Beste Schätzung</th><th>Absolute Abweichung</th></tr></thead><tbody>${r.map((x, i) => `<tr class="${x.self ? "self" : ""}"><td><span class="ranknum ${i < 3 ? "top" + (i + 1) : ""}">${i + 1}</span></td><td>${esc(x.nickname)} ${x.self ? '<span class="badge">Du</span>' : ""}</td><td><span class="group ${x.group === "staff" ? "staff" : ""}">${groups[x.group]}</span></td><td>${fmt(x.seconds)} s</td><td><b>${fmt(Math.abs(x.seconds - 30))} s</b></td></tr>`).join("")}</tbody></table>${!r.length ? '<div class="empty">Noch keine gültigen Messungen.</div>' : ""}</div><p class="note" style="margin-top:20px">Pro Person zählt nur der beste gültige Versuch. Bei gleicher Abweichung wird der früher eingegangene Versuch zuerst angezeigt.</p>`;
 }
 function rankings() {
   return (
@@ -652,7 +699,7 @@ function rankings() {
       "Die besten Schätzungen",
       "Wie nah kommt das Zeitgefühl an die Zielzeit?",
     ) +
-    `<div class="card"><div class="cardhead"><h2>Bestenliste</h2><span class="badge">${state.experiment.settings.leaderboard ? "Für Teilnehmende sichtbar" : "Für Teilnehmende ausgeblendet"}</span></div>${rankingContent()}</div>`
+    `<div class="card"><div class="cardhead"><h2>Bestenliste</h2><span class="badge">Live · bester gültiger Versuch pro Person</span></div>${rankingContent()}</div>`
   );
 }
 function settingsPage() {
@@ -675,11 +722,6 @@ function settingsPage() {
         "Messungen können durchgeführt und eingereicht werden.",
       ],
       [
-        "leaderboard",
-        "Bestenliste freigeben",
-        "Teilnehmende sehen pseudonyme Nicknames und Bestleistungen.",
-      ],
-      [
         "simulation",
         "Simulationslabor freigeben",
         "Das Modul wird für die Präsentation verfügbar.",
@@ -696,7 +738,7 @@ function settingsPage() {
       )
       .join(
         "",
-      )}<div class="settingrow"><div><b>Maximale Versuche pro Person</b><p>0 bedeutet unbegrenzt. Ungültige Versuche zählen mit.</p></div><input type="number" data-setting="maxAttempts" min="0" max="100" value="${s.maxAttempts}" aria-label="Maximale Versuche"></div><div class="settingrow"><div><b>Auswertungsstand einfrieren</b><p>Die Erhebung läuft weiter; Auswertungen verwenden die gesicherte Kopie.</p></div><button class="small" data-action="freeze">Stand jetzt sichern</button></div><div class="settingrow"><div><b>Eingefrorenen Datenstand verwenden</b><p>Zurück zu Live-Daten wechseln, ohne die Kopie zu löschen.</p></div><input type="checkbox" data-setting="frozen" ${s.frozen ? "checked" : ""} aria-label="Eingefrorene Daten verwenden"></div></div><div class="card"><h2>Veranstaltungen</h2><label>Frühere Veranstaltung öffnen</label><select id="experiment-picker" style="width:100%">${status.experiments.map((x) => `<option value="${x.id}" ${x.id === id ? "selected" : ""}>${esc(x.name)} ${x.demo ? "[DEMO]" : ""} · ${x.id}</option>`).join("")}</select><form id="new-experiment"><label for="experiment-name">Neue Veranstaltung</label><input id="experiment-name" name="name" placeholder="z. B. Lehrprobe · November 2026" required maxlength="100" style="width:100%"><label><input type="checkbox" name="demo"> Getrennte Demo-Veranstaltung</label><button class="primary" style="margin-top:12px">Veranstaltung anlegen</button></form></div><div class="card"><h2>Datenbestand zurücksetzen</h2><p class="note">Löscht alle Personen, Messungen und den eingefrorenen Stand dieser Veranstaltung dauerhaft. Andere Veranstaltungen bleiben erhalten.</p><button class="danger" data-action="reset-data">Daten löschen …</button></div></div><div>${toleranceCard()}<div class="card"><h2>Teilnahmelink</h2><img src="${endpoint("qr")}" alt="QR-Code zum Teilnahmelink" style="width:170px;display:block;margin:20px auto"><p class="note" style="word-break:break-all">${esc(location.origin + "/?e=" + id + "&view=participate")}</p><button class="small" data-action="copy">Link kopieren</button><p class="note" style="margin-top:18px">Öffentliche Projektion (nach Freigabe):<br><a href="/?e=${id}&view=presentation" target="_blank" rel="noopener">Projektionsansicht öffnen ↗</a></p></div>${e.demo ? `<div class="card"><span class="badge demo">DEMO · strikt getrennt</span><h2 style="margin-top:15px">Beispieldaten erzeugen</h2><form id="demo-form"><label for="demo-n">Anzahl Personen (2–500)</label><input id="demo-n" name="n" type="number" min="2" max="500" value="60"><label for="demo-share">Anteil Studierende (%)</label><input id="demo-share" name="share" type="number" min="0" max="100" value="60"><button class="primary" style="margin-top:20px">Demo-Datensatz erzeugen</button></form><p class="note" style="margin-top:15px">Ein normalverteilter Versuch pro Person. Bestehende Demo-Daten vorher zurücksetzen.</p></div>` : '<div class="card"><h2>Für die Lehrprobe üben</h2><p class="note">Lege eine neue Veranstaltung mit aktivierter Demo-Option an. Beispieldaten können niemals in reale Veranstaltungen geschrieben werden.</p></div>'}</div></div>`
+      )}<div class="settingrow"><div><b>Maximale Versuche pro Person</b><p>0 bedeutet unbegrenzt. Ungültige Versuche zählen mit.</p></div><input type="number" data-setting="maxAttempts" min="0" max="100" value="${s.maxAttempts}" aria-label="Maximale Versuche"></div><div class="settingrow"><div><b>Auswertungsstand einfrieren</b><p>Die Erhebung läuft weiter; Auswertungen verwenden die gesicherte Kopie.</p></div><button class="small" data-action="freeze">Stand jetzt sichern</button></div><div class="settingrow"><div><b>Eingefrorenen Datenstand verwenden</b><p>Zurück zu Live-Daten wechseln, ohne die Kopie zu löschen.</p></div><input type="checkbox" data-setting="frozen" ${s.frozen ? "checked" : ""} aria-label="Eingefrorene Daten verwenden"></div></div><div class="card"><h2>Veranstaltungen</h2><label>Frühere Veranstaltung öffnen</label><select id="experiment-picker" style="width:100%">${status.experiments.map((x) => `<option value="${x.id}" ${x.id === id ? "selected" : ""}>${esc(x.name)} ${x.demo ? "[DEMO]" : ""} · ${x.id}</option>`).join("")}</select><form id="new-experiment"><label for="experiment-name">Neue Veranstaltung</label><input id="experiment-name" name="name" placeholder="z. B. Lehrprobe · November 2026" required maxlength="100" style="width:100%"><label><input type="checkbox" name="demo"> Getrennte Demo-Veranstaltung</label><button class="primary" style="margin-top:12px">Veranstaltung anlegen</button></form></div><div class="card"><h2>Experiment neu starten</h2><p class="note">Löscht alle Messungen, Simulationen und den eingefrorenen Stand. Angemeldete Personen und Teilnahmelink bleiben erhalten. Anmeldung und Messphase werden geöffnet.</p><button class="danger" data-action="restart">↻ Experiment neu starten …</button></div><div class="card"><h2>Datenbestand vollständig löschen</h2><p class="note">Löscht alle Personen, Messungen und den eingefrorenen Stand dieser Veranstaltung dauerhaft. Andere Veranstaltungen bleiben erhalten.</p><button class="danger" data-action="reset-data">Daten löschen …</button></div></div><div>${toleranceCard()}<div class="card"><h2>Teilnahmelink</h2><img src="${endpoint("qr")}" alt="QR-Code zum Teilnahmelink" style="width:170px;display:block;margin:20px auto"><p class="note" style="word-break:break-all">${esc(location.origin + "/?e=" + id + "&view=participate")}</p><button class="small" data-action="copy">Link kopieren</button><p class="note" style="margin-top:18px">Öffentliche Projektion (nach Freigabe):<br><a href="/?e=${id}&view=presentation" target="_blank" rel="noopener">Projektionsansicht öffnen ↗</a></p></div>${e.demo ? `<div class="card"><span class="badge demo">DEMO · strikt getrennt</span><h2 style="margin-top:15px">Beispieldaten erzeugen</h2><form id="demo-form"><label for="demo-n">Anzahl Personen (2–500)</label><input id="demo-n" name="n" type="number" min="2" max="500" value="60"><label for="demo-share">Anteil Studierende (%)</label><input id="demo-share" name="share" type="number" min="0" max="100" value="60"><button class="primary" style="margin-top:20px">Demo-Datensatz erzeugen</button></form><p class="note" style="margin-top:15px">Ein normalverteilter Versuch pro Person. Bestehende Demo-Daten vorher zurücksetzen.</p></div>` : '<div class="card"><h2>Für die Lehrprobe üben</h2><p class="note">Lege eine neue Veranstaltung mit aktivierter Demo-Option an. Beispieldaten können niemals in reale Veranstaltungen geschrieben werden.</p></div>'}</div></div>`
   );
 }
 function exportPage() {
@@ -726,6 +768,7 @@ function measurements() {
       "Live-Messungen",
       "Alle eingehenden Messungen – automatisch aktualisiert.",
     ) +
+    toleranceControl() +
     `<div class="card"><div class="cardhead"><h2>Messprotokoll</h2><div class="filters"><select id="measure-group" aria-label="Gruppe filtern">${[
       ["all", "Alle Gruppen"],
       ["student", "Studierende"],
@@ -806,7 +849,7 @@ function drawParticipant() {
     own = state.own.filter((x) => x.valid),
     d = describe(own),
     best = ranking(own)[0];
-  app.innerHTML = `<main class="participant-shell"><header class="participant-nav">${brand()}<button class="small" data-view="${p ? "personal" : "overview"}">${p ? "Meine Versuche" : "Administration"}</button></header><div class="participant-body">${e.demo ? '<div class="banner warn">Demo-Veranstaltung · keine reale Teilnahme</div>' : ""}${!p ? `<div class="eyebrow">Ein Experiment. Zwei Gruppen. Dein Zeitgefühl.</div><h1>Wer hat das bessere Zeitgefühl?</h1><p class="note">30 Sekunden können sich ganz unterschiedlich anfühlen. Finde heraus, wie nah du an der Zielzeit liegst.</p><div class="card" style="margin-top:25px"><form id="join-form"><label for="nickname">Dein Nickname</label><input id="nickname" name="nickname" placeholder="Wähle ein Pseudonym" required maxlength="30" autocomplete="off"><label>Zu welcher Gruppe gehörst du?</label><div class="group-choice"><button type="button" data-group="student" class="${selectedGroup === "student" ? "selected" : ""}">Studierende</button><button type="button" data-group="staff" class="${selectedGroup === "staff" ? "selected" : ""}">Mitarbeitende</button></div><label style="font-weight:400;line-height:1.6"><input name="consent" required type="checkbox" style="width:auto"> Ich nehme freiwillig teil und verwende einen pseudonymen Nickname.</label><button class="primary" style="width:100%;margin-top:15px" ${!s.registration || e.demo ? "disabled" : ""}>${s.registration && !e.demo ? "Zur Challenge →" : "Anmeldung geschlossen"}</button></form></div><p class="privacy">Gespeichert werden Nickname, Gruppe, Teilnehmer-ID, Messwerte und Zeitpunkte. Die Administration sieht die Messdaten. Bei Freigabe zeigt die Bestenliste Nickname, Gruppe und Bestleistung. Eine gesondert freigegebene öffentliche Projektion kann pseudonyme Messdaten und Auswertungen zeigen. Keine E-Mail, kein Tracking. Deine lokale Zugangskennung ermöglicht dir den erneuten Zugriff auf diesem Gerät. Für Löschwünsche wende dich an die Veranstaltungsleitung.</p>` : view === "personal" ? `<div class="eyebrow">${esc(p.nickname)} · ${groups[p.group]}</div><h1>Dein Zeitgefühl in Zahlen</h1><div class="personal-kpis"><div>${d.n}<small>Versuche</small></div><div>${fmt(d.mean, 2)}<small>Mittelwert in s</small></div><div>${fmt(d.mae, 2)}<small>Mittlere abs. Abweichung</small></div></div><div class="card"><h2>Deine Entwicklung</h2>${personalChart(own)}<p class="note">Gestrichelte Referenzlinie: 30 Sekunden.</p><div class="tablewrap"><table><thead><tr><th>Versuch</th><th>Zeit</th><th>Abs. Abweichung</th></tr></thead><tbody>${own.map((x) => `<tr><td>${x.attempt} ${best?.id === x.id ? "◇" : ""}</td><td>${fmt(x.seconds)} s</td><td>${fmt(Math.abs(x.seconds - 30))} s</td></tr>`).join("")}</tbody></table></div><p class="note" style="margin-top:18px">Median: ${fmt(d.median)} s · Persönliche Bestleistung: ${best ? fmt(Math.abs(best.seconds - 30)) + " s Abweichung" : "–"}</p></div><button class="primary" data-view="participate">Weiter experimentieren</button> ${s.leaderboard ? '<button data-view="participant-ranking">Bestenliste</button>' : ""}` : view === "participant-ranking" ? `<h1>Bestenliste</h1><div class="card">${rankingContent()}</div><button data-view="participate">Zur Challenge</button>` : `<div class="experiment"><span class="eyebrow">Hallo ${esc(p.nickname)} · ${groups[p.group]}</span>${result ? `<h1 style="margin-top:35px">Deine Schätzung</h1><div class="result">${fmt(result.seconds)} <small style="font-size:17px;letter-spacing:0">Sekunden</small></div><p class="note">${Math.abs(result.seconds - 30) < 0.0005 ? "Genau getroffen!" : `Du hast ${fmt(Math.abs(result.seconds - 30))} Sekunden zu ${result.seconds < 30 ? "früh" : "spät"} gestoppt.`}</p><div class="personal-kpis"><div>${fmt(Math.abs(result.seconds - 30))}<small>Absolute Abweichung in s</small></div><div>${best ? fmt(Math.abs(best.seconds - 30)) : "–"}<small>Bestleistung in s</small></div><div>${state.own.length}<small>Bisherige Versuche</small></div></div><button class="primary" data-action="retry">Noch einmal versuchen</button><p class="note" style="margin-top:18px">${outbox.some((x) => x.id === result.id) ? "Messung lokal gesichert · Übertragung ausstehend" : "Messung gespeichert"}</p>` : `<div class="target">30</div><div class="target-label">Sekunden</div><p class="note" style="max-width:350px;margin:0 auto">Starte die Zeitmessung und stoppe sie, sobald du glaubst, dass genau 30 Sekunden vergangen sind.</p>${!s.running ? '<div class="alert">Die Experimentierphase ist pausiert.</div>' : s.maxAttempts && state.own.length >= s.maxAttempts ? '<div class="alert">Du hast die maximale Versuchszahl erreicht.</div>' : '<button class="timerbutton" data-action="start">START</button>'}`}<div style="margin-top:20px"><button class="small" data-view="personal">Meine Versuche</button> ${s.leaderboard ? '<button class="small" data-view="participant-ranking">Bestenliste</button>' : ""}</div></div>`}<div class="privacy" style="text-align:center">${esc(e.name)}<br><span class="live ${connected ? "" : "off"}"><span class="connection-status">${connected ? "Live verbunden" : "Verbindung wird wiederhergestellt"}</span></span>${outbox.length ? `<br>${outbox.length} lokal gesicherte Messung(en) warten auf Übertragung.` : ""}</div></div></main>`;
+  app.innerHTML = `<main class="participant-shell"><header class="participant-nav">${brand()}<button class="small" data-view="${p ? "personal" : "overview"}">${p ? "Meine Versuche" : "Administration"}</button></header><div class="participant-body">${e.demo ? '<div class="banner warn">Demo-Veranstaltung · keine reale Teilnahme</div>' : ""}${!p ? `<div class="eyebrow">Ein Experiment. Zwei Gruppen. Dein Zeitgefühl.</div><h1>Wer hat das bessere Zeitgefühl?</h1><p class="note">30 Sekunden können sich ganz unterschiedlich anfühlen. Finde heraus, wie nah du an der Zielzeit liegst.</p><div class="card" style="margin-top:25px"><form id="join-form"><label for="nickname">Dein Nickname</label><input id="nickname" name="nickname" placeholder="Wähle ein Pseudonym" required maxlength="30" autocomplete="off"><label>Zu welcher Gruppe gehörst du?</label><div class="group-choice"><button type="button" data-group="student" class="${selectedGroup === "student" ? "selected" : ""}">Studierende</button><button type="button" data-group="staff" class="${selectedGroup === "staff" ? "selected" : ""}">Mitarbeitende</button></div><label style="font-weight:400;line-height:1.6"><input name="consent" required type="checkbox" style="width:auto"> Ich nehme freiwillig teil und verwende einen pseudonymen Nickname.</label><button class="primary" style="width:100%;margin-top:15px" ${!s.registration || e.demo ? "disabled" : ""}>${s.registration && !e.demo ? "Zur Challenge →" : "Anmeldung geschlossen"}</button></form></div><p class="privacy">Gespeichert werden Nickname, Gruppe, Teilnehmer-ID, Messwerte und Zeitpunkte. Die Administration sieht die Messdaten. Die Live-Bestenliste zeigt Nickname, Gruppe und Bestleistung. Eine gesondert freigegebene öffentliche Projektion kann pseudonyme Messdaten und Auswertungen zeigen. Keine E-Mail, kein Tracking. Deine lokale Zugangskennung ermöglicht dir den erneuten Zugriff auf diesem Gerät. Für Löschwünsche wende dich an die Veranstaltungsleitung.</p>` : view === "personal" ? `<div class="eyebrow">${esc(p.nickname)} · ${groups[p.group]}</div><h1>Dein Zeitgefühl in Zahlen</h1><div class="personal-kpis"><div>${d.n}<small>Versuche</small></div><div>${fmt(d.mean, 2)}<small>Mittelwert in s</small></div><div>${fmt(d.mae, 2)}<small>Mittlere abs. Abweichung</small></div></div><div class="card"><h2>Deine Entwicklung</h2>${personalChart(own)}<p class="note">Gestrichelte Referenzlinie: 30 Sekunden.</p><div class="tablewrap"><table><thead><tr><th>Versuch</th><th>Zeit</th><th>Abs. Abweichung</th></tr></thead><tbody>${own.map((x) => `<tr><td>${x.attempt} ${best?.id === x.id ? "◇" : ""}</td><td>${fmt(x.seconds)} s</td><td>${fmt(Math.abs(x.seconds - 30))} s</td></tr>`).join("")}</tbody></table></div><p class="note" style="margin-top:18px">Median: ${fmt(d.median)} s · Persönliche Bestleistung: ${best ? fmt(Math.abs(best.seconds - 30)) + " s Abweichung" : "–"}</p></div><button class="primary" data-view="participate">Weiter experimentieren</button> <button data-view="participant-ranking">Bestenliste</button>` : view === "participant-ranking" ? `<h1>Bestenliste</h1><div class="card">${rankingContent()}</div><button data-view="participate">Zur Challenge</button>` : `<div class="experiment"><span class="eyebrow">Hallo ${esc(p.nickname)} · ${groups[p.group]}</span>${result ? `<h1 style="margin-top:35px">Deine Schätzung</h1><div class="result">${fmt(result.seconds)} <small style="font-size:17px;letter-spacing:0">Sekunden</small></div><p class="note">${Math.abs(result.seconds - 30) < 0.0005 ? "Genau getroffen!" : `Du hast ${fmt(Math.abs(result.seconds - 30))} Sekunden zu ${result.seconds < 30 ? "früh" : "spät"} gestoppt.`}</p><div class="personal-kpis"><div>${fmt(Math.abs(result.seconds - 30))}<small>Absolute Abweichung in s</small></div><div>${best ? fmt(Math.abs(best.seconds - 30)) : "–"}<small>Bestleistung in s</small></div><div>${state.own.length}<small>Bisherige Versuche</small></div></div><button class="primary" data-action="retry">Noch einmal versuchen</button><p class="note" style="margin-top:18px">${outbox.some((x) => x.id === result.id) ? "Messung lokal gesichert · Übertragung ausstehend" : "Messung gespeichert"}</p>` : `<div class="target">30</div><div class="target-label">Sekunden</div><p class="note" style="max-width:350px;margin:0 auto">Starte die Zeitmessung und stoppe sie, sobald du glaubst, dass genau 30 Sekunden vergangen sind.</p>${!s.running ? '<div class="alert">Die Experimentierphase ist pausiert.</div>' : s.maxAttempts && state.own.length >= s.maxAttempts ? '<div class="alert">Du hast die maximale Versuchszahl erreicht.</div>' : '<button class="timerbutton" data-action="start">START</button>'}`}<div style="margin-top:20px"><button class="small" data-view="personal">Meine Versuche</button> <button class="small" data-view="participant-ranking">Bestenliste</button></div></div>`}<div class="privacy" style="text-align:center">${esc(e.name)}<br><span class="live ${connected ? "" : "off"}"><span class="connection-status">${connected ? "Live verbunden" : "Verbindung wird wiederhergestellt"}</span></span>${outbox.length ? `<br>${outbox.length} lokal gesicherte Messung(en) warten auf Übertragung.` : ""}</div></div></main>`;
 }
 function personalChart(rows) {
   const lo = Math.min(20, ...rows.map((x) => x.seconds)),
@@ -821,7 +864,6 @@ function personalChart(rows) {
 const slides = [
     "welcome",
     "count",
-    "experiment",
     "measurements",
     "ranking",
     "descriptive",
@@ -829,14 +871,12 @@ const slides = [
     "box",
     "tolerance",
     "contingency",
-    "shares",
     "simulation",
     "decision",
   ],
   slideNames = [
     "Willkommen",
     "Teilnehmende",
-    "Experiment",
     "Live-Messungen",
     "Bestenliste",
     "Statistik",
@@ -844,7 +884,6 @@ const slides = [
     "Boxplots",
     "Toleranz",
     "Vierfeldertafel",
-    "Relative Häufigkeiten",
     "Simulation",
     "Testentscheidung",
   ];
@@ -857,37 +896,31 @@ function drawPresentation() {
   let body = "";
   switch (slide) {
     case "welcome":
-      body = `<div class="qrhero"><div><div class="eyebrow">Das interaktive Statistiklabor</div><h1>Wie gut ist dein Zeitgefühl?</h1><p class="subtitle">Studierende oder Mitarbeitende – wer trifft 30 Sekunden?</p><p class="note" style="margin-top:25px">QR-Code scannen. Pseudonym wählen. Mitforschen.</p><p class="note">${esc(location.origin + "/?e=" + id + "&view=participate")}</p></div><img src="${endpoint("qr")}" alt="QR-Code zur Teilnahme"></div>`;
+      body = `<div class="qrhero"><div><div class="eyebrow">Das interaktive Statistiklabor</div><h1>Wie gut ist dein Zeitgefühl?</h1><p class="subtitle">Studierende oder Mitarbeitende – wer trifft 30 Sekunden?</p><p class="note">${esc(location.origin + "/?e=" + id + "&view=participate")}</p></div><img src="${endpoint("qr")}" alt="QR-Code zur Teilnahme"></div>`;
       break;
     case "count":
       body = `<h1>Unser Experiment wächst.</h1>${metrics()}`;
       break;
-    case "experiment":
-      body = `<div style="text-align:center"><div class="target" style="font-size:180px">30</div><div class="target-label">Sekunden</div><h2>Vertraue deinem Zeitgefühl.</h2><p class="subtitle">Starten und stoppen auf deinem Smartphone – ohne Uhr und ohne Countdown.</p></div>`;
-      break;
     case "measurements":
-      body = `<h1>Unsere Live-Messungen</h1>${measurementTable(8)}`;
+      body = `<h1>Unsere Live-Messungen</h1>${toleranceControl()}${measurementTable(8)}`;
       break;
     case "ranking":
-      body = `<h1>Die besten Schätzungen</h1>${s.leaderboard ? rankingContent() : '<div class="empty">Die Bestenliste wurde noch nicht freigegeben.</div>'}`;
+      body = `<h1>Die besten Schätzungen</h1>${rankingContent()}`;
       break;
     case "descriptive":
-      body = `<h1>Die Gruppen in Zahlen</h1>${statsTable()}`;
+      body = `<h1>Die Gruppen in Zahlen</h1>${basis()}${statsTable()}`;
       break;
     case "dot":
-      body = `<h1>Zwei Gruppen. Eine gemeinsame Zeitachse.</h1>${chartCard()}`;
+      body = `<h1>Zwei Gruppen. Eine gemeinsame Zeitachse.</h1>${basis()}${chartCard()}`;
       break;
     case "box":
-      body = `<h1>Die Verteilungen im Vergleich</h1>${boxplot()}`;
+      body = `<h1>Die Verteilungen im Vergleich</h1>${basis()}${boxplot()}`;
       break;
     case "tolerance":
-      body = `<h1>Was ist eine gute Schätzung?</h1>${dotplot()}${toleranceCard()}`;
+      body = `<h1>Was ist eine gute Schätzung?</h1>${basis()}${dotplot()}${toleranceCard()}`;
       break;
     case "contingency":
-      body = `<h1>Von den Messwerten zur Vierfeldertafel</h1><p class="subtitle">Toleranz: ± ${fmt(s.tolerance, 1)} s · ${modes[s.mode]}</p>${crossTable("both")}`;
-      break;
-    case "shares":
-      body = `<h1>Wie groß ist der Unterschied?</h1><div style="max-width:900px;margin:80px auto">${shares()}</div>`;
+      body = `<h1>Von den Messwerten zur Vierfeldertafel</h1>${basis()}${toleranceControl()}${frequencyControl()}${crossTable()}${shares()}`;
       break;
     case "simulation":
       body = s.simulation
@@ -901,7 +934,7 @@ function drawPresentation() {
       body = `<h1>Was können wir schließen?</h1>${s.simulation && s.reveal >= 9 ? `<div class="result">p = ${fmt(p, 4)}</div><h2>${p == null ? "Noch keine Testentscheidung möglich" : p <= s.alpha ? "H₀ auf dem gewählten Niveau verwerfen" : "H₀ auf dem gewählten Niveau nicht verwerfen"}</h2><p class="note">Fisher-Test · α = ${pct(s.alpha)} · ${modes[s.mode]} · Testtoleranz ± ${fmt(t, 1)} s.</p><p class="note">Ein nicht signifikantes Ergebnis beweist H₀ nicht. Nicht randomisierte Gruppenzugehörigkeit und Gelegenheitsstichprobe begrenzen kausale Aussagen und Verallgemeinerungen.</p>` : '<div class="empty">Die Testentscheidung wurde noch nicht freigegeben.</div>'}`;
     }
   }
-  app.innerHTML = `<main class="presentation ${state.admin ? "" : "read-only"}"><div class="preshead"><div class="brand" style="color:var(--navy);margin:0">${brand().replace(/^<div class="brand">|<\/div>$/g, "")}</div><div class="actions"><span class="badge ${e.demo ? "demo" : ""}">${e.demo ? "DEMO" : "LIVE"} · ${esc(e.name)}</span><button class="small" data-action="fullscreen">⛶ Vollbild</button><button class="small" data-view="overview">Labor ↗</button></div></div>${body}<div class="divider"></div><div class="prescontrols"><button class="small" data-action="pres-prev">← Zurück</button><span>${presIndex + 1} / ${slides.length} · ${slideNames[presIndex]} · Pfeiltasten zum Wechseln</span><button class="small" data-action="pres-next">Weiter →</button></div><div class="present-list" style="margin-top:18px">${slideNames.map((n, i) => `<button class="${presIndex === i ? "primary" : ""}" data-pres="${i}">${n}</button>`).join("")}</div></main>`;
+  app.innerHTML = `<main class="presentation ${state.admin ? "" : "read-only"}"><div class="preshead"><div class="brand" style="color:var(--navy);margin:0">${brand().replace(/^<div class="brand">|<\/div>$/g, "")}</div><div class="actions"><span class="badge ${e.demo ? "demo" : ""}">${e.demo ? "DEMO" : "LIVE"} · ${esc(e.name)}</span><button class="small danger" data-action="restart">↻ Neu starten</button><button class="small" data-action="fullscreen">⛶ Vollbild</button><button class="small" data-view="overview">Labor ↗</button></div></div>${body}<div class="divider"></div><div class="prescontrols"><button class="small" data-action="pres-prev">← Zurück</button><span>${presIndex + 1} / ${slides.length} · ${slideNames[presIndex]} · Pfeiltasten zum Wechseln</span><button class="small" data-action="pres-next">Weiter →</button></div><div class="present-list" style="margin-top:18px">${slideNames.map((n, i) => `<button class="${presIndex === i ? "primary" : ""}" data-pres="${i}">${n}</button>`).join("")}</div></main>`;
 }
 function startTimer() {
   if (timerStart) return;
@@ -922,6 +955,7 @@ async function stopTimer() {
     id: crypto.randomUUID(),
     seconds,
     experiment: id,
+    round: state.experiment.settings.round,
     interrupted: false,
   };
   result = item;
@@ -1118,6 +1152,14 @@ async function action(e) {
     case "png":
       await chartExport(el, el.dataset.action);
       break;
+    case "restart": {
+      const d = document.createElement("dialog");
+      d.innerHTML = `<h2>Experiment neu starten?</h2><p class="note">Alle Messungen, die Bestenliste, Simulationen und der eingefrorene Auswertungsstand dieser Veranstaltung werden unwiderruflich gelöscht. Angemeldete Personen, Einstellungen und Teilnahmelink bleiben erhalten. Auch offline zwischengespeicherte alte Messungen können danach nicht erneut eingereicht werden.</p><p class="note">Gib zur Bestätigung <b>NEUSTART ${id}</b> ein.</p><form id="restart-form"><input name="confirm" required autocomplete="off" aria-label="Neustart bestätigen"><div class="actions" style="margin-top:20px"><button class="danger">Messungen löschen und neu starten</button><button type="button" data-action="close-dialog">Abbrechen</button></div></form>`;
+      document.body.append(d);
+      d.showModal();
+      d.addEventListener("close", () => d.remove());
+      break;
+    }
     case "reset-data": {
       const d = document.createElement("dialog");
       d.innerHTML = `<h2>Veranstaltungsdaten löschen?</h2><p class="note">Diese Aktion ist endgültig. Gib zur Bestätigung <b>LÖSCHEN ${id}</b> ein.</p><form id="reset-form"><input name="confirm" required autocomplete="off" aria-label="Löschbestätigung"><div class="actions" style="margin-top:20px"><button class="danger">Endgültig löschen</button><button type="button" data-action="close-dialog">Abbrechen</button></div></form>`;
@@ -1147,10 +1189,6 @@ document.addEventListener("change", async (e) => {
       await settings({ tolerance: Number(el.value) });
     if (el.id === "metric-type") {
       metricType = el.value;
-      draw();
-    }
-    if (el.id === "freq-mode") {
-      freqMode = el.value;
       draw();
     }
     if (el.id === "measure-group") {
@@ -1184,7 +1222,8 @@ document.addEventListener("submit", async (e) => {
       }
       await api("/api/login", { password: data.password });
       status = await api("/api/status");
-      await load();
+      await load(false);
+      draw();
     }
     if (form.id === "join-form") {
       const r = await api(endpoint("join"), {
@@ -1195,7 +1234,8 @@ document.addEventListener("submit", async (e) => {
         identity[id] = r;
         localStorage.setItem("challenge-identities", JSON.stringify(identity));
       }
-      await load();
+      await load(false);
+      draw();
     }
     if (form.id === "new-experiment") {
       const r = await api("/api/experiments", {
@@ -1212,8 +1252,19 @@ document.addEventListener("submit", async (e) => {
         n: Number(data.n),
         share: Number(data.share) / 100,
       });
-      await load();
+      await load(false);
+      draw();
       toast("Getrennter Demo-Datensatz erzeugt.");
+    }
+    if (form.id === "restart-form") {
+      await api(endpoint("restart"), data);
+      form.closest("dialog").close();
+      await load(false);
+      if (view === "presentation") presIndex = 0;
+      draw();
+      toast(
+        "Experiment neu gestartet. Alle Messungen sind gelöscht; die Teilnehmenden können wieder beginnen.",
+      );
     }
     if (form.id === "reset-form") {
       await api(endpoint("reset"), data);

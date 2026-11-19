@@ -2,6 +2,7 @@ import {
   select,
   describe,
   table,
+  contingencyMatrix,
   frequencies,
   difference,
   ranking,
@@ -237,8 +238,8 @@ function toleranceControl() {
 const frequencyModes = {
   absolute: "Absolute Häufigkeiten",
   total: "Relative Häufigkeiten · Gesamtstichprobe",
-  column: "Relative Häufigkeiten · je Gruppe (Spalte)",
-  row: "Relative Häufigkeiten · je Qualität (Zeile)",
+  column: "Relative Häufigkeiten · je Schätzqualität (Spalte)",
+  row: "Relative Häufigkeiten · je Gruppe (Zeile)",
   both: "Absolut und relativ · Gesamtstichprobe",
 };
 function frequencyControl() {
@@ -413,11 +414,7 @@ function crossTable(
   rows = activeRows(),
 ) {
   const z = table(rows, t),
-    matrix = [
-      [z.a, z.b, z.a + z.b],
-      [z.c, z.d, z.c + z.d],
-      [z.a + z.c, z.b + z.d, z.a + z.b + z.c + z.d],
-    ],
+    matrix = contingencyMatrix(z),
     relative = frequencies(z, mode),
     render = (v, r, c) => {
       const rel = relative[r][c];
@@ -427,7 +424,7 @@ function crossTable(
           ? `<strong>${v}</strong><small>${pct(rel)}</small>`
           : `<strong>${pct(rel)}</strong>`;
     };
-  return `<div class="tablewrap"><table class="cross"><thead><tr><th></th><th style="color:var(--teal)">Studierende</th><th style="color:#bd8a40">Mitarbeitende</th><th>Gesamt</th></tr></thead><tbody>${matrix.map((r, i) => `<tr class="${i === 0 ? "goodrow" : i === 2 ? "total" : ""}"><td>${["Gute Schätzung", "Schlechte Schätzung", "Gesamt"][i]}</td>${r.map((v, j) => `<td class="${j === 2 ? "total" : ""}">${render(v, i, j)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  return `<div class="tablewrap"><table class="cross"><thead><tr><th>Gruppe</th><th>Gute Schätzung</th><th>Schlechte Schätzung</th><th>Gesamt</th></tr></thead><tbody>${matrix.map((r, i) => `<tr class="${i === 2 ? "total" : ""}"><td>${["Studierende", "Mitarbeitende", "Gesamt"][i]}</td>${r.map((v, j) => `<td class="${j === 2 ? "total" : ""}">${render(v, i, j)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 function shares(rows = activeRows(), t = state.experiment.settings.tolerance) {
   const z = table(rows, t),
@@ -561,7 +558,7 @@ function categoryCharts() {
     }
     s += `<text x="${210 + j * 310}" y="214" text-anchor="middle">${groups[j ? "staff" : "student"]}</text>`;
   }
-  return `<div class="card"><div class="cardhead"><h2>Absolute Häufigkeiten</h2>${chartTools()}</div>${chartSVG(s)}</div><div class="card"><h2>Spaltenrelative Häufigkeiten</h2>${[
+  return `<div class="card"><div class="cardhead"><h2>Absolute Häufigkeiten</h2>${chartTools()}</div>${chartSVG(s)}</div><div class="card"><h2>Zeilenrelative Häufigkeiten</h2>${[
     "student",
     "staff",
   ]
@@ -801,9 +798,8 @@ const slides = [
     "measurements",
     "ranking",
     "descriptive",
-    "dot",
-    "box",
     "tolerance",
+    "box",
     "contingency",
     "simulation",
     "decision",
@@ -814,9 +810,8 @@ const slides = [
     "Live-Messungen",
     "Bestenliste",
     "Statistik",
-    "Punktdiagramm",
-    "Boxplots",
     "Toleranz",
+    "Boxplots",
     "Vierfeldertafel",
     "Fisher-Labor",
     "Testentscheidung",
@@ -843,9 +838,6 @@ function drawPresentation() {
       break;
     case "descriptive":
       body = `<h1>Die Gruppen in Zahlen</h1>${basis()}${statsTable()}`;
-      break;
-    case "dot":
-      body = `<h1>Zwei Gruppen. Eine gemeinsame Zeitachse.</h1>${basis()}${chartCard()}`;
       break;
     case "box":
       body = `<h1>Die Verteilungen im Vergleich</h1>${basis()}${boxplot()}`;
@@ -1012,6 +1004,12 @@ async function action(e) {
     await settings({ presentation: slides[presIndex] });
     return;
   }
+  if (el.hasAttribute("data-fisher-cell")) {
+    const [group, quality] = el.dataset.fisherCell.split("-");
+    if (state.admin)
+      await settings({ fisherGroup: group, fisherQuality: quality });
+    return;
+  }
   if (el.hasAttribute("data-fisher-step")) {
     const step = Number(el.dataset.fisherStep);
     await settings({
@@ -1110,6 +1108,10 @@ document.addEventListener("click", (e) =>
 document.addEventListener("change", async (e) => {
   try {
     const el = e.target;
+    if (el.hasAttribute("data-fisher-cell-select")) {
+      const [group, quality] = el.value.split("-");
+      await settings({ fisherGroup: group, fisherQuality: quality });
+    }
     if (el.dataset.setting) {
       let v =
         el.type === "checkbox"

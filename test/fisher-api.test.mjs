@@ -102,6 +102,7 @@ test("Fisher-Steuerung: Autorisierung, feste Daten, Projektion, Kontextwechsel u
       { fisherX: -1 },
       { fisherX: 0.5 },
       { fisherGroup: "unknown" },
+      { fisherQuality: "unknown" },
       { fisherEvent: "unknown" },
       { fisherLower: 5, fisherUpper: 4 },
     ]) {
@@ -149,12 +150,70 @@ test("Fisher-Steuerung: Autorisierung, feste Daten, Projektion, Kontextwechsel u
     await req(ep("settings"), { fisherStep: 6, fisherEvent: "fisher" }, true);
     await req(ep("settings"), { fisherGroup: "staff" }, true);
     let state = (await req(ep("state"), undefined, true)).data;
-    assert.equal(state.experiment.settings.fisherX, 9);
-    assert.equal(state.experiment.settings.fisherEvent, "single");
+    assert.equal(state.experiment.settings.fisherX, 10);
+    assert.equal(state.experiment.settings.fisherEvent, "fisher");
     assert.equal(state.experiment.settings.fisherStep, 6);
     await req(
       ep("settings"),
-      { fisherX: 0, fisherEvent: "right", freeze: true },
+      {
+        fisherGroup: "student",
+        fisherQuality: "good",
+        fisherX: 2,
+        fisherEvent: "left",
+      },
+      true,
+    );
+    for (const [group, quality, k, event] of [
+      ["student", "bad", 10, "right"],
+      ["staff", "bad", 4, "left"],
+      ["staff", "good", 8, "right"],
+      ["student", "good", 2, "left"],
+    ]) {
+      assert.equal(
+        (
+          await req(
+            ep("settings"),
+            { fisherGroup: group, fisherQuality: quality },
+            true,
+          )
+        ).status,
+        200,
+      );
+      const projected = (await req(ep("state") + "?presentation=true")).data;
+      assert.equal(projected.experiment.settings.fisherGroup, group);
+      assert.equal(projected.experiment.settings.fisherQuality, quality);
+      assert.equal(projected.experiment.settings.fisherX, k);
+      assert.equal(projected.experiment.settings.fisherEvent, event);
+      assert.deepEqual(
+        projected.rows.map((row) => row.seconds),
+        initial.rows.map((row) => row.seconds),
+      );
+    }
+    await req(
+      ep("settings"),
+      { fisherEvent: "interval", fisherLower: 0, fisherUpper: 1 },
+      true,
+    );
+    await req(ep("settings"), { fisherQuality: "bad" }, true);
+    state = (await req(ep("state"), undefined, true)).data;
+    assert.deepEqual(
+      [
+        state.experiment.settings.fisherX,
+        state.experiment.settings.fisherLower,
+        state.experiment.settings.fisherUpper,
+      ],
+      [10, 11, 12],
+    );
+    assert.equal(state.experiment.settings.fisherEvent, "interval");
+    await req(
+      ep("settings"),
+      {
+        fisherGroup: "staff",
+        fisherQuality: "good",
+        fisherX: 0,
+        fisherEvent: "right",
+        freeze: true,
+      },
       true,
     );
     const newPerson = (

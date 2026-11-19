@@ -77,6 +77,34 @@ function fixture() {
         response = { admin, setup: false, first: "test", experiments: [] };
       else if (path === "/api/login") response = { ok: true };
       else if (path.endsWith("/settings")) {
+        if ("fisherGroup" in data || "fisherQuality" in data) {
+          const counts = stats.table(
+            stats.select(store.rows, store.settings.mode),
+            store.settings.lockedTolerance ?? store.settings.tolerance,
+          );
+          const model = stats.fisherParameters(
+            counts,
+            store.settings.fisherGroup ?? "student",
+            store.settings.fisherQuality ?? "good",
+          );
+          const next = stats.reparameterizeFisher(
+            model,
+            {
+              x: store.settings.fisherX ?? model.observed,
+              lower: store.settings.fisherLower ?? model.min,
+              upper: store.settings.fisherUpper ?? model.max,
+              kind: store.settings.fisherEvent ?? "single",
+            },
+            data.fisherGroup ?? model.group,
+            data.fisherQuality ?? model.quality,
+          );
+          Object.assign(store.settings, {
+            fisherX: next.x,
+            fisherLower: next.lower,
+            fisherUpper: next.upper,
+            fisherEvent: next.kind,
+          });
+        }
         Object.assign(store.settings, data);
         response = { ok: true };
         queueMicrotask(notify);
@@ -213,6 +241,9 @@ test("Präsentation: bereinigte Reiter, fünf Modi und nachvollziehbare Statisti
     (x) => x.textContent,
   );
   assert.equal(names.includes("Experiment"), false);
+  assert.equal(names.includes("Punktdiagramm"), false);
+  assert.equal(names.filter((name) => name === "Toleranz").length, 1);
+  assert.equal(names.indexOf("Toleranz"), names.indexOf("Statistik") + 1);
   assert.equal(names.includes("Relative Häufigkeiten"), false);
   assert.equal(
     ui.document.body.textContent.includes(
@@ -220,13 +251,7 @@ test("Präsentation: bereinigte Reiter, fünf Modi und nachvollziehbare Statisti
     ),
     false,
   );
-  for (const name of [
-    "Statistik",
-    "Punktdiagramm",
-    "Boxplots",
-    "Toleranz",
-    "Vierfeldertafel",
-  ]) {
+  for (const name of ["Statistik", "Boxplots", "Toleranz", "Vierfeldertafel"]) {
     await ui.slide(name);
     assert.deepEqual(
       [...ui.query('[data-setting="mode"]').querySelectorAll("option")].map(
@@ -270,7 +295,7 @@ test("Toleranz und relative Häufigkeiten werden zwischen Admin und Projektion s
   await settled(() =>
     projection.query(".tolerance-toolbar")?.textContent.includes("± 1,0"),
   );
-  admin.change('[data-setting="frequency"]', "column");
+  admin.change('[data-setting="frequency"]', "row");
   await settled(() =>
     projection.query(".frequency-toolbar")?.textContent.includes("je Gruppe"),
   );
@@ -437,7 +462,7 @@ test("Fisher-Labor: Tafeln, Diagramm, kumulierte Ereignisse und p-Wert live auf 
       admin.query('[data-probability="fisher"]')?.textContent ===
       "p = 0,00137973",
   );
-  admin.change('[data-setting="fisherGroup"]', "staff");
+  admin.change("[data-fisher-cell-select]", "staff-good");
   await settled(
     () =>
       projection.query(".fisher-p-card .fisher-event-expression")
@@ -459,4 +484,215 @@ test("Fisher-Labor: Tafeln, Diagramm, kumulierte Ereignisse und p-Wert live auf 
       "H₀ nicht verwerfen",
   );
   assert.match(projection.query(".fisher-decision").textContent, /kein Beweis/);
+});
+
+test("Alle Vierfeldertafeln und relativen Modi zeigen Gruppen als Zeilen", async () => {
+  const { client, store } = fixture();
+  store.rows = [];
+  store.settings.mode = "all";
+  for (const [group, count, seconds] of [
+    ["student", 2, 30],
+    ["student", 1, 40],
+    ["staff", 3, 30],
+    ["staff", 4, 40],
+  ])
+    for (let i = 0; i < count; i++)
+      store.rows.push({
+        id: `${group}-${seconds}-${i}`,
+        participant: `${group}-${seconds}-${i}`,
+        nickname: "Test",
+        group,
+        attempt: 1,
+        seconds,
+        valid: 1,
+        created: "2026-01-01T00:00:00Z",
+      });
+  const admin = client({ view: "overview" });
+  await settled(() => admin.query(".sidebar"));
+  const check = () => {
+    const table = admin.query(".cross");
+    assert.deepEqual(
+      [...table.querySelectorAll("thead th")].map((el) => el.textContent),
+      ["Gruppe", "Gute Schätzung", "Schlechte Schätzung", "Gesamt"],
+    );
+    assert.deepEqual(
+      [...table.querySelectorAll("tbody tr")].map(
+        (tr) => tr.firstElementChild.textContent,
+      ),
+      ["Studierende", "Mitarbeitende", "Gesamt"],
+    );
+  };
+  check();
+  assert.deepEqual(
+    [...admin.query(".cross").querySelectorAll("tbody strong")].map(
+      (el) => el.textContent,
+    ),
+    ["2", "1", "3", "3", "4", "7", "5", "5", "10"],
+  );
+  admin.click('[data-view="contingency"]');
+  await settled(() => admin.query('[data-setting="frequency"]'));
+  check();
+  for (const [mode, expected] of [
+    ["total", ["20,0 %", "10,0 %", "30,0 %"]],
+    ["column", ["40,0 %", "20,0 %", "30,0 %"]],
+    ["row", ["66,7 %", "33,3 %", "100,0 %"]],
+  ]) {
+    admin.change('[data-setting="frequency"]', mode);
+    await settled(
+      () =>
+        admin.query('[data-setting="frequency"] option[selected]')?.value ===
+        mode,
+    );
+    assert.deepEqual(
+      [
+        ...admin
+          .query(".cross")
+          .querySelectorAll("tbody tr:first-child strong"),
+      ].map((el) => el.textContent),
+      expected,
+    );
+    check();
+  }
+  admin.click('[data-view="presentation"]');
+  await settled(() => admin.query(".present-list"));
+  await admin.slide("Vierfeldertafel");
+  check();
+  await admin.slide("Fisher-Labor");
+  check();
+});
+
+test("Vier frei auswählbare Fisher-Zellen: passende Parameter, k-Notation und unveränderte Wahrscheinlichkeit", async () => {
+  const { client, store } = fixture();
+  store.rows = [];
+  for (const [group, count, seconds] of [
+    ["student", 2, 30],
+    ["student", 7, 40],
+    ["staff", 5, 30],
+    ["staff", 3, 40],
+  ])
+    for (let i = 0; i < count; i++)
+      store.rows.push({
+        id: `${group}-${seconds}-${i}`,
+        participant: `${group}-${seconds}-${i}`,
+        nickname: "Test",
+        group,
+        attempt: 1,
+        seconds,
+        valid: 1,
+        created: "2026-01-01T00:00:00Z",
+      });
+  const admin = client();
+  await settled(() => admin.query(".present-list"));
+  await admin.slide("Fisher-Labor");
+  admin.click('[data-fisher-step="4"]');
+  await settled(() => admin.query("[data-fisher-cell-select]"));
+  assert.equal(
+    admin.query("[data-fisher-cell-select]").querySelectorAll("option").length,
+    4,
+  );
+  admin.change('[data-setting="fisherX"][type="number"]', "4");
+  await settled(
+    () =>
+      admin.query(".fisher-possible .focus-cell strong")?.textContent === "4",
+  );
+  const expectedRows = [
+    ["4", "5", "9"],
+    ["3", "5", "8"],
+    ["7", "10", "17"],
+  ];
+  const probability = admin
+    .query('[data-probability="single"]')
+    .textContent.split(" = ")
+    .at(-1);
+  for (const [cell, K, n, k, formula] of [
+    [
+      "student-bad",
+      "9",
+      "10",
+      "5",
+      [
+        ["9", "5"],
+        ["8", "5"],
+        ["17", "10"],
+      ],
+    ],
+    [
+      "staff-good",
+      "8",
+      "7",
+      "3",
+      [
+        ["8", "3"],
+        ["9", "4"],
+        ["17", "7"],
+      ],
+    ],
+    [
+      "staff-bad",
+      "8",
+      "10",
+      "5",
+      [
+        ["8", "5"],
+        ["9", "5"],
+        ["17", "10"],
+      ],
+    ],
+    [
+      "student-good",
+      "9",
+      "7",
+      "4",
+      [
+        ["9", "4"],
+        ["8", "3"],
+        ["17", "7"],
+      ],
+    ],
+  ]) {
+    if (cell === "staff-good") admin.change("[data-fisher-cell-select]", cell);
+    else admin.click(`.fisher-possible [data-fisher-cell="${cell}"]`);
+    await settled(
+      () =>
+        admin.query("[data-fisher-cell-select] option[selected]")?.value ===
+        cell,
+    );
+    assert.equal(
+      admin.query(".fisher-possible .focus-cell strong").textContent,
+      k,
+    );
+    const parameters = [
+      ...admin.query(".fisher-parameters").querySelectorAll("b"),
+    ].map((el) => el.textContent);
+    assert.equal(parameters[1], K);
+    assert.equal(parameters[2], n);
+    assert.match(parameters[3], /^\d+ bis \d+$/);
+    assert.deepEqual(
+      [...admin.query(".fisher-formula").querySelectorAll(".binomial")].map(
+        (el) => [...el.children].map((c) => c.textContent),
+      ),
+      formula,
+    );
+    assert.match(admin.query(".fisher-law").textContent, /P\(X = k\)/);
+    assert.doesNotMatch(admin.query(".fisher-lab").textContent, /\bx\b/);
+    assert.equal(
+      admin
+        .query('input[type="number"][data-setting="fisherX"]')
+        .getAttribute("aria-label"),
+      "Wert von k",
+    );
+    const rows = [
+      ...admin.query(".fisher-possible table").querySelectorAll("tbody tr"),
+    ].map((tr) =>
+      [...tr.querySelectorAll("strong")].map((el) => el.textContent),
+    );
+    assert.deepEqual(rows, expectedRows);
+    assert.equal(
+      admin
+        .query('[data-probability="single"]')
+        .textContent.split(" = ")
+        .at(-1),
+      probability,
+    );
+  }
 });

@@ -21,6 +21,7 @@ import {
   difference,
   permute,
   fisherParameters,
+  reparameterizeFisher,
 } from "./public/stats.js";
 const cliPort = process.argv.includes("--port")
   ? process.argv[process.argv.indexOf("--port") + 1]
@@ -49,6 +50,7 @@ const defaults = {
   reveal: 1,
   fisherStep: 1,
   fisherGroup: "student",
+  fisherQuality: "good",
   fisherX: null,
   fisherEvent: "single",
   fisherLower: null,
@@ -107,6 +109,7 @@ function experiment(id) {
   // Keep saved events compatible when opening an older presentation state.
   if (settings.presentation === "experiment") settings.presentation = "welcome";
   if (settings.presentation === "shares") settings.presentation = "contingency";
+  if (settings.presentation === "dot") settings.presentation = "tolerance";
   return { ...e, settings };
 }
 function rows(id) {
@@ -169,13 +172,19 @@ function fisherSettings(e, settings = e.settings) {
   const r = settings.frozen && e.snapshot ? JSON.parse(e.snapshot) : rows(e.id);
   const tolerance = settings.lockedTolerance ?? settings.tolerance;
   const counts = table(select(r, settings.mode), tolerance);
-  const model = fisherParameters(counts, settings.fisherGroup);
+  const model = fisherParameters(
+    counts,
+    settings.fisherGroup,
+    settings.fisherQuality,
+  );
   const context = JSON.stringify([
     counts,
     settings.mode,
     tolerance,
     settings.round,
     settings.fisherGroup,
+    settings.fisherQuality,
+    "row-model-v2",
   ]);
   const changed = settings.fisherContext !== context;
   const bounded = (x, fallback) =>
@@ -507,18 +516,49 @@ const server = http.createServer(async (req, res) => {
         if (["two", "left", "right"].includes(b.side)) s.side = b.side;
         if (typeof b.presentation === "string" && b.presentation.length < 30)
           s.presentation = b.presentation;
-        if ("fisherGroup" in b) {
-          if (!["student", "staff"].includes(b.fisherGroup))
-            throw Error("Unbekannte Gruppe für den Fisher-Test.");
-          s.fisherGroup = b.fisherGroup;
-        }
         s = fisherSettings(e, s);
         const fisherRows =
           s.frozen && e.snapshot ? JSON.parse(e.snapshot) : rows(id);
-        const fisherModel = fisherParameters(
-          table(select(fisherRows, s.mode), s.lockedTolerance ?? s.tolerance),
-          s.fisherGroup,
+        const counts = table(
+          select(fisherRows, s.mode),
+          s.lockedTolerance ?? s.tolerance,
         );
+        let fisherModel = fisherParameters(
+          counts,
+          s.fisherGroup,
+          s.fisherQuality,
+        );
+        if ("fisherGroup" in b && !["student", "staff"].includes(b.fisherGroup))
+          throw Error("Unbekannte Gruppe für den Fisher-Test.");
+        if ("fisherQuality" in b && !["good", "bad"].includes(b.fisherQuality))
+          throw Error("Unbekannte Schätzqualität für den Fisher-Test.");
+        const nextGroup = b.fisherGroup ?? s.fisherGroup;
+        const nextQuality = b.fisherQuality ?? s.fisherQuality;
+        if (nextGroup !== s.fisherGroup || nextQuality !== s.fisherQuality) {
+          const transformed = reparameterizeFisher(
+            fisherModel,
+            {
+              x: s.fisherX,
+              lower: s.fisherLower,
+              upper: s.fisherUpper,
+              kind: s.fisherEvent,
+            },
+            nextGroup,
+            nextQuality,
+          );
+          s = fisherSettings(e, {
+            ...s,
+            fisherGroup: nextGroup,
+            fisherQuality: nextQuality,
+          });
+          Object.assign(s, {
+            fisherX: transformed.x,
+            fisherLower: transformed.lower,
+            fisherUpper: transformed.upper,
+            fisherEvent: transformed.kind,
+          });
+          fisherModel = fisherParameters(counts, nextGroup, nextQuality);
+        }
         if ("fisherStep" in b) {
           if (
             !Number.isInteger(b.fisherStep) ||

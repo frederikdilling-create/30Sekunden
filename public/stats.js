@@ -84,14 +84,17 @@ export function table(rows, t) {
     d: b.filter((x) => !good(x.seconds, t)).length,
   };
 }
+// Every displayed contingency table uses groups as rows and quality as columns.
+export function contingencyMatrix({ a, b, c, d }) {
+  return [
+    [a, c, a + c],
+    [b, d, b + d],
+    [a + b, c + d, a + b + c + d],
+  ];
+}
 // Marginal totals are included. Empty denominators are undefined, not zero.
 export function frequencies(counts, mode = "total") {
-  const { a, b, c, d } = counts;
-  const matrix = [
-    [a, b, a + b],
-    [c, d, c + d],
-    [a + c, b + d, a + b + c + d],
-  ];
+  const matrix = contingencyMatrix(counts);
   return matrix.map((row, i) =>
     row.map((value, j) => {
       const denominator =
@@ -120,42 +123,97 @@ function logChoose(n, k) {
     s += Math.log(n - i + 1) - Math.log(i);
   return s;
 }
-// Fisher conditions on both margins. X counts good estimates in the chosen group.
-export function fisherParameters(t, group = "student") {
+// Condition on both margins. Row membership is the population characteristic;
+// the selected quality column supplies the sample, for any of the four cells.
+export function fisherParameters(t, group = "student", quality = "good") {
   if (!["student", "staff"].includes(group))
     throw new RangeError("Unbekannte Gruppe.");
-  if (![t.a, t.b, t.c, t.d].every((x) => Number.isSafeInteger(x) && x >= 0))
+  if (!["good", "bad"].includes(quality))
+    throw new RangeError("Unbekannte Schätzqualität.");
+  if (
+    ![t.a, t.b, t.c, t.d].every(
+      (value) => Number.isSafeInteger(value) && value >= 0,
+    )
+  )
     throw new RangeError(
       "Die Vierfeldertafel benötigt nichtnegative ganze Häufigkeiten.",
     );
   const N = t.a + t.b + t.c + t.d,
-    K = t.a + t.b;
-  const nStudent = t.a + t.c,
+    nStudent = t.a + t.c,
     nStaff = t.b + t.d;
-  const n = group === "student" ? nStudent : nStaff;
+  const nGood = t.a + t.b,
+    nBad = t.c + t.d;
+  const K = group === "student" ? nStudent : nStaff;
+  const n = quality === "good" ? nGood : nBad;
+  const cell =
+    group === "student"
+      ? quality === "good"
+        ? "a"
+        : "c"
+      : quality === "good"
+        ? "b"
+        : "d";
   return {
     N,
     K,
     n,
     nStudent,
     nStaff,
+    nGood,
+    nBad,
     group,
-    observed: group === "student" ? t.a : t.b,
+    quality,
+    cell,
+    observed: t[cell],
     min: Math.max(0, n - (N - K)),
     max: Math.min(n, K),
     expected: N ? (n * K) / N : null,
+    increasingWithStudentSuccess:
+      (group === "student") === (quality === "good"),
     testable: nStudent > 0 && nStaff > 0,
-    informative: nStudent > 0 && nStaff > 0 && K > 0 && K < N,
+    informative: nStudent > 0 && nStaff > 0 && nGood > 0 && nBad > 0,
   };
 }
-export function fisherTableAt(model, x) {
-  if (!Number.isInteger(x) || x < model.min || x > model.max)
+export function fisherTableAt(model, k) {
+  if (!Number.isInteger(k) || k < model.min || k > model.max)
     throw new RangeError(
       "Diese Tafel ist bei den festen Randsummen nicht möglich.",
     );
-  const a = model.group === "student" ? x : model.K - x;
-  const b = model.K - a;
+  let a;
+  if (model.quality === "good")
+    a = model.group === "student" ? k : model.nGood - k;
+  else
+    a =
+      model.group === "student"
+        ? model.nStudent - k
+        : model.nStudent - model.nBad + k;
+  const b = model.nGood - a;
   return { a, b, c: model.nStudent - a, d: model.nStaff - b };
+}
+// Express the SAME hypothetical table and event using a different inner cell.
+export function reparameterizeFisher(model, selection, group, quality) {
+  const next = fisherParameters(
+    fisherTableAt(model, model.observed),
+    group,
+    quality,
+  );
+  const transform = (k) => fisherTableAt(model, k)[next.cell];
+  const flips =
+    model.increasingWithStudentSuccess !== next.increasingWithStudentSuccess;
+  const first = transform(selection.lower ?? model.min),
+    last = transform(selection.upper ?? model.max);
+  const kind =
+    flips && selection.kind === "left"
+      ? "right"
+      : flips && selection.kind === "right"
+        ? "left"
+        : selection.kind;
+  return {
+    x: transform(selection.x ?? model.observed),
+    lower: Math.min(first, last),
+    upper: Math.max(first, last),
+    kind,
+  };
 }
 function logSum(values) {
   if (!values.length) return -Infinity;
@@ -168,8 +226,8 @@ function logSum(values) {
     Math.log(values.reduce((sum, x) => sum + Math.exp(x - maximum), 0))
   );
 }
-export function hypergeometric(t, group = "student") {
-  const model = fisherParameters(t, group),
+export function hypergeometric(t, group = "student", quality = "good") {
+  const model = fisherParameters(t, group, quality),
     { N, K, n, min, max } = model;
   // A recurrence and log-sum-exp avoid factorial overflow and preserve tiny tails.
   let logP = logChoose(K, min) + logChoose(N - K, n - min) - logChoose(N, n);
@@ -208,14 +266,14 @@ export function probabilityEvent(
     if (kind === "left") return p.x <= x;
     if (kind === "right") return p.x >= x;
     if (kind === "interval") return p.x >= lower && p.x <= upper;
-    // Left/right always refer to p_Studierende − p_Mitarbeitende,
-    // so changing the illustrative group must reverse the inequality.
+    // Test direction always refers to GOOD-estimate rates: student − staff.
+    // Switching either the group or quality reverses the selected-cell scale.
     if (side === "left")
-      return model.group === "student"
+      return model.increasingWithStudentSuccess
         ? p.x <= model.observed
         : p.x >= model.observed;
     if (side === "right")
-      return model.group === "student"
+      return model.increasingWithStudentSuccess
         ? p.x >= model.observed
         : p.x <= model.observed;
     return p.logProbability <= observed.logProbability + 1e-10;

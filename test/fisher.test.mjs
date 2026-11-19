@@ -6,6 +6,8 @@ import {
   hypergeometric,
   probabilityEvent,
   fisher,
+  reparameterizeFisher,
+  contingencyMatrix,
 } from "../public/stats.js";
 import {
   probabilityText,
@@ -28,58 +30,65 @@ test("Hypergeometrie gegen exakte ganzzahlige Kombinatorik für alle kleinen Vie
       for (let c = 0; c <= 5; c++)
         for (let d = 0; d <= 5; d++) {
           const t = { a, b, c, d };
-          for (const group of ["student", "staff"]) {
-            const model = hypergeometric(t, group),
-              denominator = choose(model.N, model.n);
-            let total = 0;
-            for (const point of model.points) {
-              const exact =
-                Number(
-                  choose(model.K, point.x) *
-                    choose(model.N - model.K, model.n - point.x),
-                ) / Number(denominator);
-              close(point.probability, exact);
-              total += point.probability;
-              const z = fisherTableAt(model, point.x);
-              assert.equal(z.a + z.c, a + c);
-              assert.equal(z.b + z.d, b + d);
-              assert.equal(z.a + z.b, a + b);
-              assert.equal(z.c + z.d, c + d);
-              assert.ok(
-                Object.values(z).every((x) => x >= 0 && Number.isInteger(x)),
-              );
-            }
-            close(total, 1);
-            if (model.testable) {
-              const observed =
-                choose(model.K, model.observed) *
-                choose(model.N - model.K, model.n - model.observed);
-              for (const side of ["two", "left", "right"]) {
-                let numerator = 0n;
-                for (const p of model.points) {
-                  const v =
-                    choose(model.K, p.x) *
-                    choose(model.N - model.K, model.n - p.x);
-                  const included =
-                    side === "two"
-                      ? v <= observed
-                      : side === "left"
-                        ? group === "student"
-                          ? p.x <= model.observed
-                          : p.x >= model.observed
-                        : group === "student"
-                          ? p.x >= model.observed
-                          : p.x <= model.observed;
-                  if (included) numerator += v;
-                }
-                close(
-                  probabilityEvent(model, { kind: "fisher", side }).probability,
-                  Number(numerator) / Number(denominator),
+          for (const group of ["student", "staff"])
+            for (const quality of ["good", "bad"]) {
+              const model = hypergeometric(t, group, quality),
+                denominator = choose(model.N, model.n);
+              let total = 0;
+              for (const point of model.points) {
+                const exact =
+                  Number(
+                    choose(model.K, point.x) *
+                      choose(model.N - model.K, model.n - point.x),
+                  ) / Number(denominator);
+                close(point.probability, exact);
+                total += point.probability;
+                const z = fisherTableAt(model, point.x);
+                assert.equal(z[model.cell], point.x);
+                const previousProbability =
+                  Number(choose(a + b, z.a) * choose(c + d, a + c - z.a)) /
+                  Number(choose(a + b + c + d, a + c));
+                close(point.probability, previousProbability);
+                assert.equal(z.a + z.c, a + c);
+                assert.equal(z.b + z.d, b + d);
+                assert.equal(z.a + z.b, a + b);
+                assert.equal(z.c + z.d, c + d);
+                assert.ok(
+                  Object.values(z).every((x) => x >= 0 && Number.isInteger(x)),
                 );
-                close(fisher(t, side), Number(numerator) / Number(denominator));
               }
-            } else assert.equal(fisher(t), null);
-          }
+              close(total, 1);
+              if (model.testable) {
+                const observed =
+                  choose(model.K, model.observed) *
+                  choose(model.N - model.K, model.n - model.observed);
+                for (const side of ["two", "left", "right"]) {
+                  let numerator = 0n;
+                  for (const p of model.points) {
+                    const v =
+                      choose(model.K, p.x) *
+                      choose(model.N - model.K, model.n - p.x);
+                    const candidate = fisherTableAt(model, p.x);
+                    const included =
+                      side === "two"
+                        ? v <= observed
+                        : side === "left"
+                          ? candidate.a <= t.a
+                          : candidate.a >= t.a;
+                    if (included) numerator += v;
+                  }
+                  close(
+                    probabilityEvent(model, { kind: "fisher", side })
+                      .probability,
+                    Number(numerator) / Number(denominator),
+                  );
+                  close(
+                    fisher(t, side),
+                    Number(numerator) / Number(denominator),
+                  );
+                }
+              } else assert.equal(fisher(t), null);
+            }
         }
 });
 
@@ -212,5 +221,79 @@ test("Didaktische Darstellung trennt Einzelereignis, Ereignissumme und Testentsc
   assert.match(
     fisherDecision({ a: 0, b: 4, c: 0, d: 4 }, settings),
     /benötigt jede Gruppe/,
+  );
+});
+
+test("Alle vier Testzellen nutzen die Zeilensumme als K und die Qualitätsspalte als n", () => {
+  const t = { a: 2, b: 5, c: 7, d: 3 };
+  const expected = [
+    ["student", "good", "a", 9, 7, 2],
+    ["student", "bad", "c", 9, 10, 7],
+    ["staff", "good", "b", 8, 7, 5],
+    ["staff", "bad", "d", 8, 10, 3],
+  ];
+  const original = hypergeometric(t);
+  const observedProbability = original.points.find(
+    (p) => p.x === original.observed,
+  ).probability;
+  for (const [group, quality, cell, K, n, observed] of expected) {
+    const model = hypergeometric(t, group, quality);
+    assert.deepEqual(
+      [model.N, model.cell, model.K, model.n, model.observed],
+      [17, cell, K, n, observed],
+    );
+    close(
+      model.points.find((p) => p.x === observed).probability,
+      observedProbability,
+    );
+    for (const side of ["two", "left", "right"])
+      close(
+        probabilityEvent(model, { kind: "fisher", side }).probability,
+        fisher(t, side),
+      );
+  }
+});
+
+test("Zellwechsel erhalten dieselbe hypothetische Tafel und dasselbe kumulierte Ereignis", () => {
+  const counts = { a: 2, b: 5, c: 7, d: 3 };
+  const base = hypergeometric(counts);
+  const candidate = fisherTableAt(base, 4);
+  for (const group of ["student", "staff"])
+    for (const quality of ["good", "bad"]) {
+      const model = hypergeometric(counts, group, quality);
+      for (const kind of ["single", "left", "right", "interval", "fisher"]) {
+        const selection = { kind, x: 4, lower: 2, upper: 4 };
+        const transformed = reparameterizeFisher(
+          base,
+          selection,
+          group,
+          quality,
+        );
+        assert.deepEqual(fisherTableAt(model, transformed.x), candidate);
+        for (const side of ["two", "left", "right"]) {
+          const oldEvent = probabilityEvent(base, { ...selection, side });
+          const nextEvent = probabilityEvent(model, { ...transformed, side });
+          close(nextEvent.probability, oldEvent.probability);
+          const oldTables = oldEvent.xs
+            .map((x) => fisherTableAt(base, x).a)
+            .sort((a, b) => a - b);
+          const nextTables = nextEvent.xs
+            .map((x) => fisherTableAt(model, x).a)
+            .sort((a, b) => a - b);
+          assert.deepEqual(nextTables, oldTables);
+        }
+      }
+    }
+});
+
+test("Gemeinsame Vierfeldertafel: Gruppen in den Zeilen, Qualität in den Spalten", () => {
+  assert.deepEqual(contingencyMatrix({ a: 2, b: 3, c: 1, d: 4 }), [
+    [2, 1, 3],
+    [3, 4, 7],
+    [5, 5, 10],
+  ]);
+  assert.throws(
+    () => fisherParameters({ a: 1, b: 2, c: 3, d: 4 }, "student", "unknown"),
+    RangeError,
   );
 });

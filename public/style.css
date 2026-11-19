@@ -2184,3 +2184,20 @@ tbody tr:hover {
   object-fit: contain;
   object-position: left center;
 }
+/* All four inner Fisher cells can be selected without changing table orientation. */
+.fisher-cell-choice {
+  display: block;
+  width: 100%;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  padding: 6px 8px;
+}
+.fisher-cell-choice:hover {
+  border-color: #92a9c7;
+  background: #e8eff8;
+}
+.fisher-cell-choice[aria-pressed="true"] {
+  border-color: #6087ab;
+}

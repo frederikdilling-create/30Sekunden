@@ -9,27 +9,28 @@ import { once } from "node:events";
 import { frequencies, table, select } from "../public/stats.js";
 
 test("Relative Häufigkeiten mit Gesamt-, Zeilen-, Spaltenbezug und leeren Rändern", () => {
-  const z = { a: 2, b: 1, c: 1, d: 4 };
+  const z = { a: 2, b: 3, c: 1, d: 4 };
   assert.deepEqual(frequencies(z, "total"), [
-    [2 / 8, 1 / 8, 3 / 8],
-    [1 / 8, 4 / 8, 5 / 8],
-    [3 / 8, 5 / 8, 1],
+    [2 / 10, 1 / 10, 3 / 10],
+    [3 / 10, 4 / 10, 7 / 10],
+    [5 / 10, 5 / 10, 1],
   ]);
   assert.deepEqual(frequencies(z, "column"), [
-    [2 / 3, 1 / 5, 3 / 8],
-    [1 / 3, 4 / 5, 5 / 8],
+    [2 / 5, 1 / 5, 3 / 10],
+    [3 / 5, 4 / 5, 7 / 10],
     [1, 1, 1],
   ]);
   assert.deepEqual(frequencies(z, "row"), [
     [2 / 3, 1 / 3, 1],
-    [1 / 5, 4 / 5, 1],
-    [3 / 8, 5 / 8, 1],
+    [3 / 7, 4 / 7, 1],
+    [5 / 10, 5 / 10, 1],
   ]);
   assert.deepEqual(
     frequencies({ a: 0, b: 0, c: 0, d: 0 }),
     Array.from({ length: 3 }, () => [null, null, null]),
   );
-  assert.equal(frequencies({ a: 0, b: 1, c: 0, d: 2 }, "column")[0][0], null);
+  assert.equal(frequencies({ a: 0, b: 0, c: 1, d: 2 }, "column")[0][0], null);
+  assert.equal(frequencies({ a: 0, b: 1, c: 0, d: 2 }, "row")[0][0], null);
 });
 
 test("Gruppenstatistik für fünf Datengrundlagen, Live-Bestenliste und abgesicherter Neustart", async () => {
